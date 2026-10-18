@@ -1,3 +1,5 @@
+import { SSHRepositoryReader } from '../ssh-repository'
+import { parseSSHRepositoryPath } from '../ssh-path'
 import * as Path from 'path'
 
 import { getBlobContents } from './show'
@@ -957,7 +959,14 @@ export async function getWorkingDirectoryImage(
   repository: Repository,
   file: FileChange
 ): Promise<Image> {
-  const contents = await readFile(Path.join(repository.path, file.path))
+  const ssh = parseSSHRepositoryPath(repository.path)
+  const contents =
+    ssh === null
+      ? await readFile(Path.join(repository.path, file.path))
+      : await new SSHRepositoryReader(ssh).readWorkingFile(
+          file.path,
+          8 * 1024 * 1024
+        )
   return new Image(
     contents.buffer,
     contents.toString('base64'),

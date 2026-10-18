@@ -1,3 +1,5 @@
+import { parseSSHRepositoryPath } from './ssh-path'
+import { remotePathExists } from './ssh-files'
 import { access } from 'fs/promises'
 import constant from 'lodash/constant'
 
@@ -6,4 +8,6 @@ import constant from 'lodash/constant'
  * whether it's visible to the current process or not).
  */
 export const pathExists = (path: string) =>
-  access(path).then(constant(true), constant(false))
+  parseSSHRepositoryPath(path) === null
+    ? access(path).then(constant(true), constant(false))
+    : remotePathExists(path)

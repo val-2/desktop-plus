@@ -1010,7 +1010,9 @@ export class FilterChangesList extends React.Component<
     return {
       label: RevealInFileManagerLabel,
       action: () => revealInFileManager(this.props.repository, file.path),
-      enabled: file.status.kind !== AppFileStatusKind.Deleted,
+      enabled:
+        !this.props.repository.isSSH &&
+        file.status.kind !== AppFileStatusKind.Deleted,
     }
   }
 
@@ -1029,7 +1031,7 @@ export class FilterChangesList extends React.Component<
       action: () => {
         this.props.onOpenItemInExternalEditor(file.path)
       },
-      enabled,
+      enabled: enabled && !this.props.repository.isSSH,
     }
   }
 
@@ -1175,7 +1177,7 @@ export class FilterChangesList extends React.Component<
       {
         label: OpenWithDefaultProgramLabel,
         action: () => this.props.onOpenItem(path),
-        enabled: enabled && isSafeExtension,
+        enabled: enabled && isSafeExtension && !this.props.repository.isSSH,
       }
     )
 
@@ -1209,7 +1211,7 @@ export class FilterChangesList extends React.Component<
       {
         label: OpenWithDefaultProgramLabel,
         action: () => this.props.onOpenItem(path),
-        enabled: enabled && isSafeExtension,
+        enabled: enabled && isSafeExtension && !this.props.repository.isSSH,
       }
     )
 
@@ -1588,6 +1590,9 @@ export class FilterChangesList extends React.Component<
   }
 
   private onChangedFileDoubleClick = (item: IChangesListItem) => {
+    if (this.props.repository.isSSH) {
+      return
+    }
     this.props.onOpenItemInExternalEditor(item.change.path)
   }
 

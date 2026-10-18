@@ -1,3 +1,4 @@
+import { joinRepositoryPath } from '../ssh-path'
 import * as Path from 'path'
 import {
   getNonForkGitHubRepository,
@@ -100,7 +101,8 @@ import { IStatsStore } from '../stats'
 import { getTagsToPush, storeTagsToPush } from './helpers/tags-to-push-storage'
 import { DiffSelection, ITextDiff } from '../../models/diff'
 import { getDefaultBranch } from '../helpers/default-branch'
-import { rm, stat } from 'fs/promises'
+import { rm } from 'fs/promises'
+import { stat, removeSSHFile, trashSSHFile } from '../ssh-files'
 import { findForkedRemotesToPrune } from './helpers/find-forked-remotes-to-prune'
 import { findDefaultBranch } from '../find-default-branch'
 import { cleanUntrackedFiles } from '../git/clean'
@@ -1371,6 +1373,9 @@ export class GitStore extends BaseStore {
    * an empty array if no entries exist
    */
   public get currentBranchStashEntries(): ReadonlyArray<IStashEntry> {
+    if (this.repository.isSSH) {
+      return [...this._desktopStashEntries.values()].flat()
+    }
     return this._tip && this._tip.kind === TipState.Valid
       ? this._desktopStashEntries.get(this._tip.branch.name) || []
       : []
@@ -1761,9 +1766,16 @@ export class GitStore extends BaseStore {
       if (file.status.kind !== AppFileStatusKind.Deleted && !foundSubmodule) {
         if (moveToTrash) {
           try {
-            await this.shell.moveItemToTrash(
-              Path.resolve(this.repository.path, file.path)
-            )
+            if (this.repository.isSSH) {
+              await trashSSHFile(
+                joinRepositoryPath(this.repository.path, file.path),
+                this.repository.resolvedGitDir
+              )
+            } else {
+              await this.shell.moveItemToTrash(
+                Path.resolve(this.repository.path, file.path)
+              )
+            }
           } catch (e) {
             if (askForConfirmationOnDiscardChangesPermanently) {
               throw new DiscardChangesError(e, this.repository, files)
@@ -1773,7 +1785,9 @@ export class GitStore extends BaseStore {
             // chosen to always discard the changes permanently if trash failes.
             // We need to remove the file manually.
             if (file.status.kind === AppFileStatusKind.Untracked) {
-              await rm(Path.join(this.repository.path, file.path))
+              await (this.repository.isSSH ? removeSSHFile : rm)(
+                joinRepositoryPath(this.repository.path, file.path)
+              )
             }
           }
         } else if (moveToTrash === false) {
@@ -1781,7 +1795,9 @@ export class GitStore extends BaseStore {
           // discard the changes permanently. We need to remove the file
           // manually.
           if (file.status.kind === AppFileStatusKind.Untracked) {
-            await rm(Path.join(this.repository.path, file.path))
+            await (this.repository.isSSH ? removeSSHFile : rm)(
+              joinRepositoryPath(this.repository.path, file.path)
+            )
           }
         }
       }

@@ -1,3 +1,4 @@
+import { parseSSHRepositoryPath, sshRepositoryPath } from '../../lib/ssh-path'
 import * as React from 'react'
 import * as Path from 'path'
 
@@ -27,7 +28,9 @@ export class RenameWorktreeDialog extends React.Component<
     super(props)
 
     this.state = {
-      newName: Path.basename(props.worktreePath),
+      newName: Path.basename(
+        parseSSHRepositoryPath(props.worktreePath)?.path ?? props.worktreePath
+      ),
       renaming: false,
     }
   }
@@ -39,7 +42,14 @@ export class RenameWorktreeDialog extends React.Component<
   private onSubmit = async () => {
     const { worktreePath, repository, onDismissed } = this.props
     const { newName } = this.state
-    const newPath = Path.join(Path.dirname(worktreePath), newName)
+    const ssh = parseSSHRepositoryPath(worktreePath)
+    const newPath =
+      ssh === null
+        ? Path.join(Path.dirname(worktreePath), newName)
+        : sshRepositoryPath({
+            ...ssh,
+            path: Path.posix.join(Path.posix.dirname(ssh.path), newName),
+          })
 
     this.setState({ renaming: true })
 
@@ -57,7 +67,10 @@ export class RenameWorktreeDialog extends React.Component<
   }
 
   public render() {
-    const currentName = Path.basename(this.props.worktreePath)
+    const currentName = Path.basename(
+      parseSSHRepositoryPath(this.props.worktreePath)?.path ??
+        this.props.worktreePath
+    )
     const disabled =
       this.state.newName.length === 0 ||
       this.state.newName === currentName ||

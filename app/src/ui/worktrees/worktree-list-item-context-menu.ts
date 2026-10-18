@@ -1,3 +1,4 @@
+import { parseSSHRepositoryPath } from '../../lib/ssh-path'
 import * as Path from 'path'
 
 import { IMenuItem } from '../../lib/menu-item'
@@ -23,7 +24,8 @@ export function generateWorktreeContextMenuItems(
     onRemoveWorktree,
     onOpenInNewWindow,
   } = config
-  const name = Path.basename(path)
+  const remotePath = parseSSHRepositoryPath(path)?.path ?? path
+  const name = Path.basename(remotePath)
   const items = new Array<IMenuItem>()
 
   if (onOpenInNewWindow !== undefined) {
@@ -51,7 +53,7 @@ export function generateWorktreeContextMenuItems(
 
   items.push({
     label: __DARWIN__ ? 'Copy Worktree Path' : 'Copy worktree path',
-    action: () => writeClipboardText(path),
+    action: () => writeClipboardText(remotePath),
   })
 
   if (onRemoveWorktree !== undefined) {

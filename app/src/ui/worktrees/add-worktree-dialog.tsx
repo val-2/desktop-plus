@@ -1,3 +1,5 @@
+import { posix } from 'path'
+import { parseSSHRepositoryPath, sshRepositoryPath } from '../../lib/ssh-path'
 import * as React from 'react'
 
 import { Branch, BranchType } from '../../models/branch'
@@ -52,7 +54,13 @@ export class AddWorktreeDialog extends React.Component<
   }
 
   private onFullPathChanged = (fullPath: string | null) => {
-    this.setState({ fullPath })
+    const ssh = parseSSHRepositoryPath(this.props.repository.path)
+    this.setState({
+      fullPath:
+        fullPath !== null && ssh !== null
+          ? sshRepositoryPath({ ...ssh, path: fullPath })
+          : fullPath,
+    })
   }
 
   private onWorktreeNameChanged = (worktreeName: string) => {
@@ -194,6 +202,15 @@ export class AddWorktreeDialog extends React.Component<
       >
         <DialogContent>
           <RepositoryPath
+            initialPath={
+              this.props.repository.isSSH
+                ? posix.dirname(
+                    parseSSHRepositoryPath(this.props.repository.path)!.path
+                  )
+                : undefined
+            }
+            pathLabel={this.props.repository.isSSH ? 'Remote Path' : undefined}
+            hideFilePicker={this.props.repository.isSSH}
             initialName={
               this.props.initialWorktreeName ?? this.props.initialBranchName
             }

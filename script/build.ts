@@ -259,18 +259,20 @@ async function packageApp() {
       identityValidation: !useAdHocSigning,
     },
     osxNotarize,
-    protocols: [
-      {
-        name: getBundleID(),
-        schemes: [
-          !isDevelopmentBuild
-            ? 'x-github-desktop-auth'
-            : 'x-github-desktop-dev-auth',
-          'x-github-client',
-          'github-mac',
+    protocols: getProductName().endsWith(' SSH')
+      ? []
+      : [
+          {
+            name: getBundleID(),
+            schemes: [
+              !isDevelopmentBuild
+                ? 'x-github-desktop-auth'
+                : 'x-github-desktop-dev-auth',
+              'x-github-client',
+              'github-mac',
+            ],
+          },
         ],
-      },
-    ],
     extendInfo: extendInfoPath,
 
     // Windows

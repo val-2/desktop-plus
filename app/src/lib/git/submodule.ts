@@ -1,3 +1,5 @@
+import { parseSSHRepositoryPath, sshRepositoryPath } from '../ssh-path'
+import { posix } from 'path'
 import { git, IGitStringExecutionOptions } from './core'
 import { Repository } from '../../models/repository'
 import { SubmoduleEntry } from '../../models/submodule'
@@ -11,7 +13,7 @@ import { AuthenticationErrors } from './authentication'
 import { IRemote } from '../../models/remote'
 import { Progress } from '../../models/progress'
 import { join, resolve } from 'path'
-import { readFile } from 'fs/promises'
+import { readFile } from '../ssh-files'
 
 /**
  * Update submodules after a git operation.
@@ -143,7 +145,14 @@ export async function listSubmodules(
     const commonDirPath = join(repository.resolvedGitDir, 'commondir')
     const commonDir = await readFile(commonDirPath, 'utf8')
       .then(content => content.replace(/\r?\n$/, ''))
-      .then(p => (p ? resolve(repository.resolvedGitDir, p) : null))
+      .then(p => {
+        const ssh = parseSSHRepositoryPath(repository.resolvedGitDir)
+        return !p
+          ? null
+          : ssh === null
+          ? resolve(repository.resolvedGitDir, p)
+          : sshRepositoryPath({ ...ssh, path: posix.resolve(ssh.path, p) })
+      })
       .catch(() => null)
 
     if (!commonDir || !(await pathExists(join(commonDir, 'modules')))) {

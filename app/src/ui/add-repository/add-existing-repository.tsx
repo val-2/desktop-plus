@@ -1,3 +1,6 @@
+import { SSHRepositoryReader } from '../../lib/ssh-repository'
+import { sshRepositoryPath } from '../../lib/ssh-path'
+import { Checkbox, CheckboxValue } from '../lib/checkbox'
 import * as React from 'react'
 import * as Path from 'path'
 import { Dispatcher } from '../dispatcher'
@@ -28,6 +31,10 @@ interface IAddExistingRepositoryProps {
 }
 
 interface IAddExistingRepositoryState {
+  readonly ssh: boolean
+  readonly sshHost: string
+  readonly sshError: string
+
   readonly path: string
 
   /**
@@ -58,6 +65,9 @@ export class AddExistingRepository extends React.Component<
     const path = this.props.path ? this.props.path : ''
 
     this.state = {
+      ssh: false,
+      sshHost: '',
+      sshError: '',
       path,
       showNonGitRepositoryWarning: false,
       isRepositoryBare: false,
@@ -228,24 +238,70 @@ export class AddExistingRepository extends React.Component<
     return (
       <Dialog
         id="add-existing-repository"
-        title={__DARWIN__ ? 'Add Local Repository' : 'Add local repository'}
+        title={
+          this.state.ssh
+            ? 'Add SSH Repository'
+            : __DARWIN__
+            ? 'Add Local Repository'
+            : 'Add local repository'
+        }
         onSubmit={this.addRepository}
         onDismissed={this.props.onDismissed}
         loading={this.state.isTrustingRepository}
       >
         <DialogContent>
           <Row>
+            <Checkbox
+              label="Connect over SSH"
+              value={this.state.ssh ? CheckboxValue.On : CheckboxValue.Off}
+              onChange={this.onSSHToggled}
+            />
+          </Row>
+          {this.state.ssh && (
+            <Row>
+              <TextBox
+                label="SSH host"
+                placeholder="user@host or SSH config alias"
+                value={this.state.sshHost}
+                onValueChanged={this.onSSHHostChanged}
+              />
+            </Row>
+          )}
+          <Row>
             <TextBox
               ref={this.pathTextBoxRef}
               value={this.state.path}
-              label={__DARWIN__ ? 'Local Path' : 'Local path'}
+              label={
+                this.state.ssh
+                  ? 'Remote path'
+                  : __DARWIN__
+                  ? 'Local Path'
+                  : 'Local path'
+              }
               placeholder="repository path"
               onValueChanged={this.onPathChanged}
               ariaDescribedBy="add-existing-repository-path-error"
             />
-            <Button onClick={this.showFilePicker}>Choose…</Button>
+            {!this.state.ssh && (
+              <Button onClick={this.showFilePicker}>Choose…</Button>
+            )}
           </Row>
-          {this.renderErrors()}
+          {this.state.ssh ? (
+            <>
+              <p>
+                Uses your SSH configuration and agent. The repository appears in
+                the normal repository list. Git operations run on the server
+                using its configuration and credentials.
+              </p>
+              {this.state.sshError && (
+                <InputError id="ssh-repository-error">
+                  {this.state.sshError}
+                </InputError>
+              )}
+            </>
+          ) : (
+            this.renderErrors()
+          )}
         </DialogContent>
 
         <DialogFooter>
@@ -257,7 +313,20 @@ export class AddExistingRepository extends React.Component<
     )
   }
 
+  private onSSHToggled = () =>
+    this.setState(state => ({
+      ssh: !state.ssh,
+      sshError: '',
+      showNonGitRepositoryWarning: false,
+    }))
+  private onSSHHostChanged = (sshHost: string) =>
+    this.setState({ sshHost, sshError: '' })
+
   private onPathChanged = async (path: string) => {
+    if (this.state.ssh) {
+      this.setState({ path, sshError: '' })
+      return
+    }
     const type = await getRepositoryType(this.resolvedPath(path))
 
     const isRepository = type.kind !== 'missing' && type.kind !== 'unsafe'
@@ -292,6 +361,30 @@ export class AddExistingRepository extends React.Component<
   }
 
   private addRepository = async () => {
+    if (this.state.ssh) {
+      this.setState({ isTrustingRepository: true, sshError: '' })
+      try {
+        const connection = {
+          host: this.state.sshHost.trim(),
+          path: this.state.path,
+        }
+        new SSHRepositoryReader(connection)
+        const repositories = await this.props.dispatcher.addRepositories(
+          [sshRepositoryPath(connection)],
+          null
+        )
+        if (repositories.length > 0) {
+          this.props.onDismissed()
+          this.props.dispatcher.closeFoldout(FoldoutType.Repository)
+          await this.props.dispatcher.selectRepository(repositories[0])
+        }
+      } catch (error) {
+        this.setState({ sshError: error.message })
+      } finally {
+        this.setState({ isTrustingRepository: false })
+      }
+      return
+    }
     const { path } = this.state
     const isValidPath = await this.validatePath(path)
 

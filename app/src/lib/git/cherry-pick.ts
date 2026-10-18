@@ -24,7 +24,7 @@ import { stageManualConflictResolution } from './stage'
 import { getCommit } from '.'
 import { IMultiCommitOperationProgress } from '../../models/progress'
 import { join } from 'path'
-import { readFile } from 'fs/promises'
+import { readFile } from '../ssh-files'
 import { pathExists } from '../path-exists'
 
 /** The app-specific results from attempting to cherry pick commits*/

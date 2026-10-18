@@ -1,3 +1,4 @@
+import { readSSHGitIgnore, writeSSHGitIgnore } from '../ssh-files'
 import * as Path from 'path'
 import * as FS from 'fs'
 import { Repository } from '../../models/repository'
@@ -82,6 +83,9 @@ export async function readGitIgnoreAtRoot(
   repository: Repository
 ): Promise<string | null> {
   const ignorePath = Path.join(repository.path, '.gitignore')
+  if (repository.isSSH) {
+    return readSSHGitIgnore(ignorePath)
+  }
   const file = await openExistingGitIgnore(ignorePath, FS.constants.O_RDONLY)
 
   if (file === null) {
@@ -106,6 +110,14 @@ export async function saveGitIgnore(
   text: string
 ): Promise<void> {
   const ignorePath = Path.join(repository.path, '.gitignore')
+
+  if (repository.isSSH) {
+    await writeSSHGitIgnore(
+      ignorePath,
+      await formatGitIgnoreContents(text, repository)
+    )
+    return
+  }
 
   if (text === '') {
     await ensureGitIgnoreIsNotSymbolicLink(ignorePath)

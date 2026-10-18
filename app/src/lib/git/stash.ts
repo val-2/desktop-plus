@@ -10,7 +10,7 @@ import {
   WorkingDirectoryFileChange,
   CommittedFileChange,
 } from '../../models/status'
-import { parseRawLogWithNumstat } from './log'
+import { parseRawLogWithNumstat, getChangedFiles } from './log'
 import { stageFiles } from './update-index'
 import { Branch } from '../../models/branch'
 import { createLogParser } from './git-delimiter-parser'
@@ -73,7 +73,15 @@ export async function getStashes(repository: Repository): Promise<StashResult> {
   const entries = parse(result.stdout)
 
   for (const { name, message, stashSha, tree, parents, date } of entries) {
-    const details = extractStashDetails(message)
+    const details =
+      extractStashDetails(message) ??
+      (repository.isSSH
+        ? {
+            branchName:
+              /^(?:WIP on|On) ([^:]+):/.exec(message)?.[1] ?? 'SSH stash',
+            customName: message,
+          }
+        : null)
 
     if (details !== null) {
       desktopEntries.push({
@@ -423,5 +431,19 @@ export async function getStashedFiles(
 
   const { stdout } = await git(args, repository.path, 'getStashedFiles')
 
-  return parseRawLogWithNumstat(stdout, stashSha, `${stashSha}^`).files
+  const files = parseRawLogWithNumstat(stdout, stashSha, `${stashSha}^`).files
+  if (!repository.isSSH) {
+    return files
+  }
+  const thirdParent = await git(
+    ['rev-parse', '--verify', '--quiet', `${stashSha}^3`],
+    repository.path,
+    'getStashUntrackedParent',
+    { successExitCodes: new Set([0, 1]) }
+  )
+  if (thirdParent.exitCode !== 0) {
+    return files
+  }
+  const untracked = await getChangedFiles(repository, `${stashSha}^3`)
+  return [...files, ...untracked.files]
 }

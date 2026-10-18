@@ -1,4 +1,5 @@
 import * as Path from 'path'
+import { parseSSHRepositoryPath } from '../lib/ssh-path'
 
 import { GitHubRepository, ForkedGitHubRepository } from './github-repository'
 import { IAheadBehind } from './branch'
@@ -20,6 +21,10 @@ export enum LoginSpecialValue {
 }
 
 function getBaseName(path: string): string {
+  const ssh = parseSSHRepositoryPath(path)
+  if (ssh !== null) {
+    return `${Path.posix.basename(ssh.path)} · SSH`
+  }
   const baseName = Path.basename(path)
 
   if (baseName.length === 0) {
@@ -33,6 +38,9 @@ function getBaseName(path: string): string {
 
 /** A local repository. */
 export class Repository {
+  public get isSSH(): boolean {
+    return parseSSHRepositoryPath(this.path) !== null
+  }
   public readonly name: string
 
   /**
@@ -86,7 +94,10 @@ export class Repository {
      */
     public readonly mainWorktreePath: string | undefined = undefined
   ) {
-    this.name = (gitHubRepository && gitHubRepository.name) || getBaseName(path)
+    this.name =
+      (gitHubRepository &&
+        `${gitHubRepository.name}${this.isSSH ? ' · SSH' : ''}`) ||
+      getBaseName(this.isSSH ? mainWorktreePath ?? path : path)
 
     this.hash = createEqualityHash(
       path,

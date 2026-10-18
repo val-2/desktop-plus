@@ -1,11 +1,10 @@
 import * as React from 'react'
-import * as Path from 'path'
 import { Dispatcher } from '../dispatcher'
 import * as octicons from '../octicons/octicons.generated'
 import { Repository } from '../../models/repository'
 import { ToolbarDropdown, DropdownState } from './dropdown'
 import { FoldoutType, IConstrainedValue } from '../../lib/app-state'
-import { WorktreeEntry } from '../../models/worktree'
+import { WorktreeEntry, getWorktreeDisplayName } from '../../models/worktree'
 import { WorktreeList } from '../worktrees/worktree-list'
 import { showContextualMenu, IMenuItem } from '../../lib/menu-item'
 import { generateWorktreeContextMenuItems } from '../worktrees/worktree-list-item-context-menu'
@@ -155,7 +154,7 @@ export class WorktreeDropdown extends React.Component<
     const currentState: DropdownState = isOpen ? 'open' : 'closed'
     const currentWorktree = this.getCurrentWorktree()
     const title = currentWorktree
-      ? Path.basename(currentWorktree.path)
+      ? getWorktreeDisplayName(currentWorktree)
       : this.props.repository.name
     const description = __DARWIN__ ? 'Current Worktree' : 'Current worktree'
 

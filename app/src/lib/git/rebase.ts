@@ -29,7 +29,7 @@ import { getStatus } from './status'
 import { getCommitsBetweenCommits } from './rev-list'
 import { Branch } from '../../models/branch'
 import { join } from 'path'
-import { readFile } from 'fs/promises'
+import { readFile } from '../ssh-files'
 import { pathExists } from '../path-exists'
 
 /** The app-specific results from attempting to rebase a repository */
@@ -579,6 +579,11 @@ export async function rebaseInteractive(
   lastRetainedCommitRef: string | null,
   opts?: RebaseInteractiveOptions
 ): Promise<RebaseResult> {
+  if (repository.isSSH) {
+    throw new Error(
+      'Interactive history editing is not yet supported over SSH.'
+    )
+  }
   const baseOptions: IGitStringExecutionOptions = {
     expectedErrors: new Set([GitError.RebaseConflicts]),
     env: {

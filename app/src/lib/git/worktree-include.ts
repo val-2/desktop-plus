@@ -1,6 +1,9 @@
+import { joinRepositoryPath } from '../ssh-path'
 import * as Fs from 'fs'
 import * as Path from 'path'
-import { readFile, copyFile, mkdir } from 'fs/promises'
+import { copyFile, mkdir } from 'fs/promises'
+import { readFile, copySSHFile } from '../ssh-files'
+import { parseSSHRepositoryPath } from '../ssh-path'
 import ignore from 'ignore'
 import type { Repository } from '../../models/repository'
 import { git } from './core'
@@ -77,8 +80,23 @@ export async function copyWorktreeIncludeFiles(
   files: ReadonlyArray<string>
 ): Promise<void> {
   for (const file of files) {
-    const src = Path.join(sourcePath, file)
-    const dest = Path.join(destinationPath, file)
+    const src = joinRepositoryPath(sourcePath, file)
+    const dest = joinRepositoryPath(destinationPath, file)
+
+    if (parseSSHRepositoryPath(sourcePath) !== null) {
+      if (Path.posix.isAbsolute(file) || file.split('/').includes('..')) {
+        continue
+      }
+      try {
+        await copySSHFile(src, dest)
+      } catch (e) {
+        log.warn(
+          '[worktree-include] Could not copy remote file',
+          e instanceof Error ? e : undefined
+        )
+      }
+      continue
+    }
 
     // Guard against path traversal: the resolved destination must be
     // inside the worktree directory.

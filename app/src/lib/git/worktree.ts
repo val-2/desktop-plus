@@ -1,3 +1,4 @@
+import { parseSSHRepositoryPath, sshRepositoryPath } from '../ssh-path'
 import * as Path from 'path'
 import type { Repository } from '../../models/repository'
 import type { WorktreeEntry, WorktreeType } from '../../models/worktree'
@@ -64,7 +65,18 @@ export async function listWorktrees(
     'listWorktrees'
   )
 
-  return parseWorktreePorcelainOutput(result.stdout)
+  const entries = parseWorktreePorcelainOutput(result.stdout)
+  const ssh = parseSSHRepositoryPath(
+    typeof repositoryOrPath === 'string'
+      ? repositoryOrPath
+      : repositoryOrPath.path
+  )
+  return ssh === null
+    ? entries
+    : entries.map(entry => ({
+        ...entry,
+        path: sshRepositoryPath({ ...ssh, path: entry.path }),
+      }))
 }
 
 export async function listWorktreesFromGitDir(
@@ -76,7 +88,14 @@ export async function listWorktreesFromGitDir(
     'listWorktreesFromGitDir'
   )
 
-  return parseWorktreePorcelainOutput(result.stdout)
+  const ssh = parseSSHRepositoryPath(gitDir)
+  const entries = parseWorktreePorcelainOutput(result.stdout)
+  return ssh === null
+    ? entries
+    : entries.map(entry => ({
+        ...entry,
+        path: sshRepositoryPath({ ...ssh, path: entry.path }),
+      }))
 }
 
 /**
@@ -133,7 +152,7 @@ export async function addWorktree(
     args.push('-b', options.createBranch)
   }
 
-  args.push('--', path)
+  args.push('--', remoteWorktreePath(repository.path, path))
 
   if (options.commitish) {
     args.push(options.commitish)
@@ -151,7 +170,7 @@ export async function removeWorktree(
   if (force) {
     args.push('--force')
   }
-  args.push(worktreePath)
+  args.push(remoteWorktreePath(repositoryPath, worktreePath))
 
   await git(args, repositoryPath, 'removeWorktree')
 }
@@ -162,8 +181,29 @@ export async function moveWorktree(
   newPath: string
 ): Promise<void> {
   await git(
-    ['worktree', 'move', oldPath, newPath],
+    [
+      'worktree',
+      'move',
+      remoteWorktreePath(repository.path, oldPath),
+      remoteWorktreePath(repository.path, newPath),
+    ],
     repository.path,
     'moveWorktree'
   )
+}
+
+function remoteWorktreePath(repositoryPath: string, target: string): string {
+  const connection = parseSSHRepositoryPath(repositoryPath)
+  const remote = parseSSHRepositoryPath(target)
+  if (connection === null) {
+    return target
+  }
+  if (remote !== null && remote.host !== connection.host) {
+    throw new Error('Worktrees must be on the same SSH host.')
+  }
+  const path = remote?.path ?? target
+  if (!Path.posix.isAbsolute(path) || /[\0\r\n]/.test(path)) {
+    throw new Error('A worktree requires an absolute path on the SSH host.')
+  }
+  return path
 }

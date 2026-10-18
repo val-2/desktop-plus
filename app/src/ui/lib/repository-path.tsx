@@ -28,6 +28,8 @@ interface IRepositoryPathProps {
   /** Initial name value. Defaults to ''. */
   readonly initialName?: string
 
+  readonly hideFilePicker?: boolean
+
   /**
    * Initial base path value. When null or undefined the component will
    * load the user's default directory on mount.
@@ -202,9 +204,11 @@ export class RepositoryPath extends React.Component<
             disabled={loadingPath}
             ariaDescribedBy={this.props.pathAriaDescribedBy}
           />
-          <Button onClick={this.showFilePicker} disabled={loadingPath}>
-            Choose…
-          </Button>
+          {!this.props.hideFilePicker && (
+            <Button onClick={this.showFilePicker} disabled={loadingPath}>
+              Choose…
+            </Button>
+          )}
         </Row>
       </>
     )

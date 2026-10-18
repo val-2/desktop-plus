@@ -2,6 +2,7 @@ import { git } from './core'
 import { directoryExists } from '../directory-exists'
 import { dirname, resolve } from 'path'
 import { realpath } from 'fs/promises'
+import { parseSSHRepositoryPath, sshRepositoryPath } from '../ssh-path'
 
 export type RepositoryType =
   | { kind: 'bare' }
@@ -18,6 +19,29 @@ export type RepositoryType =
  * path, verified against Git's ownership diagnostic.
  */
 export async function getRepositoryType(path: string): Promise<RepositoryType> {
+  const ssh = parseSSHRepositoryPath(path)
+  if (ssh !== null) {
+    const result = await git(
+      [
+        'rev-parse',
+        '--is-bare-repository',
+        '--path-format=absolute',
+        '--show-toplevel',
+        '--absolute-git-dir',
+      ],
+      path,
+      'getSSHRepositoryType'
+    )
+    const [bare, root, gitDir] = result.stdout.trimEnd().split('\n')
+    if (bare === 'true') {
+      return { kind: 'bare' }
+    }
+    return {
+      kind: 'regular',
+      topLevelWorkingDirectory: sshRepositoryPath({ ...ssh, path: root }),
+      gitDir: sshRepositoryPath({ ...ssh, path: gitDir }),
+    }
+  }
   if (!(await directoryExists(path))) {
     return { kind: 'missing' }
   }

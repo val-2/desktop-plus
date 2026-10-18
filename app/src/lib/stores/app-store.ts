@@ -1,3 +1,4 @@
+import { parseSSHRepositoryPath, sshRepositoryPath } from '../ssh-path'
 import * as Path from 'path'
 import { writeFile } from 'fs/promises'
 import {
@@ -2746,6 +2747,23 @@ export class AppStore extends TypedBaseStore<IAppState> {
       this.currentOnboardingTutorialStep = TutorialStep.NotApplicable
     }
 
+    // Install native progress before publishing the selection. A null remote
+    // means "not loaded" here, not "publish this repository".
+    const loadingSSH =
+      repository instanceof Repository &&
+      repository.isSSH &&
+      !this.repositoryStateCache.get(repository).isPushPullFetchInProgress
+    if (loadingSSH) {
+      this.repositoryStateCache.update(repository, () => ({
+        isPushPullFetchInProgress: true,
+        pushPullFetchProgress: {
+          kind: 'generic',
+          title: 'Loading repository',
+          description: 'Reading repository over SSH',
+          value: 0,
+        },
+      }))
+    }
     this.selectedRepository = repository
 
     this.emitUpdate()
@@ -2771,6 +2789,21 @@ export class AppStore extends TypedBaseStore<IAppState> {
       : null
 
     this.updateRecentRepositories(previousRepositoryId, repository.id)
+
+    if (repository.isSSH) {
+      try {
+        await this._refreshRepository(repository)
+        return repository
+      } finally {
+        if (loadingSSH) {
+          this.repositoryStateCache.update(repository, () => ({
+            isPushPullFetchInProgress: false,
+            pushPullFetchProgress: null,
+          }))
+          this.emitUpdate()
+        }
+      }
+    }
 
     // if repository might be marked missing, try checking if it has been restored
     const refreshedRepository = await this.recoverMissingRepository(repository)
@@ -4803,7 +4836,7 @@ export class AppStore extends TypedBaseStore<IAppState> {
 
     // if the repository path doesn't exist on disk,
     // set the flag and don't try anything Git-related
-    const exists = await pathExists(repository.path)
+    const exists = repository.isSSH || (await pathExists(repository.path))
     if (!exists) {
       const recoveredWorktree = await this.recoverMissingWorktree(repository)
 
@@ -4845,6 +4878,11 @@ export class AppStore extends TypedBaseStore<IAppState> {
     await this.updateSidebarIndicator(repository, status)
 
     if (status === null) {
+      if (repository.isSSH) {
+        throw new Error(
+          'Could not refresh the SSH repository. Check the connection; the previous state may be out of date.'
+        )
+      }
       await this._updateRepositoryMissing(repository, true)
       return
     }
@@ -4991,7 +5029,7 @@ export class AppStore extends TypedBaseStore<IAppState> {
       return
     }
 
-    const exists = await pathExists(repository.path)
+    const exists = repository.isSSH || (await pathExists(repository.path))
     if (!exists) {
       lookup.delete(repository.id)
       return
@@ -7502,6 +7540,10 @@ export class AppStore extends TypedBaseStore<IAppState> {
     worktreePath: string,
     newPath: string
   ): Promise<void> {
+    const ssh = parseSSHRepositoryPath(newPath)
+    if (ssh !== null) {
+      newPath = sshRepositoryPath(ssh)
+    }
     await moveWorktree(repository, worktreePath, newPath)
 
     // If the worktree being renamed is the currently selected one, switch to
@@ -9718,6 +9760,20 @@ export class AppStore extends TypedBaseStore<IAppState> {
     const invalidPaths = new Array<string>()
 
     for (const path of paths) {
+      if (parseSSHRepositoryPath(path) !== null) {
+        const type = await getRepositoryType(path)
+        if (type.kind !== 'regular') {
+          throw new Error('An SSH working-tree repository is required.')
+        }
+        addedRepositories.push(
+          await this.repositoriesStore.addRepository(
+            type.topLevelWorkingDirectory,
+            type.gitDir,
+            login
+          )
+        )
+        continue
+      }
       const repositoryType = await getRepositoryType(path).catch(e => {
         log.error('Could not determine repository type', e)
         return { kind: 'missing' } as RepositoryType

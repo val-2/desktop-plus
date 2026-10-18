@@ -5,7 +5,9 @@ import * as Fs from 'fs'
 import * as Path from 'path'
 
 /** Base names of previous app versions to migrate from, in priority order. */
-const LegacyAppNames = ['GitHub Desktop Plus', 'GitHub Desktop']
+const LegacyAppNames = __APP_NAME__.endsWith(' SSH')
+  ? ['Desktop Plus', 'GitHub Desktop Plus', 'GitHub Desktop']
+  : ['GitHub Desktop Plus', 'GitHub Desktop']
 
 const MigrationSentinel = '.config-migrated'
 

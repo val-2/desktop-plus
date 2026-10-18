@@ -1,9 +1,9 @@
 {
   "$NOTE": "NOTE: Do not edit the 'version' field, as that will cause merge conflicts with upstream. The version is set using env.APP_VERSION.",
-  "name": "desktop-plus",
+  "name": "desktop-plus-ssh",
   "desktopName": "desktop-plus.desktop",
-  "productName": "Desktop Plus",
-  "bundleID": "org.desktop-plus.DesktopPlus",
+  "productName": "Desktop Plus SSH",
+  "bundleID": "org.desktop-plus.DesktopPlus.SSH",
   "companyName": "Desktop Plus",
   "version": "3.6.7",
   "main": "./main.js",

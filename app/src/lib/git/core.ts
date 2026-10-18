@@ -17,6 +17,8 @@ import { kStringMaxLength } from 'buffer'
 import { withHooksEnv } from '../hooks/with-hooks-env'
 import { coerceToString } from './coerce-to-string'
 import { pushTerminalChunk } from './push-terminal-chunk'
+import { parseSSHRepositoryPath } from '../ssh-path'
+import { executeSSHGit } from '../ssh-repository'
 
 export const isMaxBufferExceededError = (
   error: unknown
@@ -228,6 +230,57 @@ export async function git(
   name: string,
   options?: IGitExecutionOptions
 ): Promise<IGitResult> {
+  const sshConnection = parseSSHRepositoryPath(path)
+  if (sshConnection !== null) {
+    const raw = await executeSSHGit(sshConnection, args, {
+      streamEncoding:
+        options?.encoding === 'buffer'
+          ? undefined
+          : options?.encoding ?? 'utf8',
+      stdin: options?.stdin,
+      maxBuffer: options?.maxBuffer,
+      env: options?.env,
+      processCallback: process => {
+        options?.onTerminalOutputAvailable?.(cb => {
+          process.stdout?.on('data', cb)
+          process.stderr?.on('data', cb)
+          return {
+            unsubscribe: () => {
+              process.stdout?.off('data', cb)
+              process.stderr?.off('data', cb)
+            },
+          }
+        })
+        options?.processCallback?.(process)
+      },
+    })
+    const parsedError =
+      raw.exitCode === 0 ? null : parseError(raw.stderr.toString('utf8'))
+    const result = {
+      stdout:
+        options?.encoding === 'buffer'
+          ? raw.stdout
+          : raw.stdout.toString('utf8'),
+      stderr:
+        options?.encoding === 'buffer'
+          ? raw.stderr
+          : raw.stderr.toString('utf8'),
+      exitCode: raw.exitCode,
+      gitError: parsedError,
+      gitErrorDescription:
+        parsedError === null
+          ? null
+          : getDescriptionForError(parsedError, raw.stderr.toString('utf8')),
+      path,
+    } as IGitResult
+    if (
+      (options?.successExitCodes ?? new Set([0])).has(raw.exitCode) ||
+      (parsedError !== null && options?.expectedErrors?.has(parsedError))
+    ) {
+      return result
+    }
+    throw new GitError(result, args, raw.stderr.toString('utf8'))
+  }
   const defaultOptions: IGitExecutionOptions = {
     successExitCodes: new Set([0]),
     expectedErrors: new Set(),

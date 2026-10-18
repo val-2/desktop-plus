@@ -1,3 +1,5 @@
+import { SSHRepositoryReader } from '../../../lib/ssh-repository'
+import { parseSSHRepositoryPath } from '../../../lib/ssh-path'
 import * as Path from 'path'
 
 import { assertNever } from '../../../lib/fatal-error'
@@ -87,6 +89,13 @@ async function getNewFileContent(
   }
 
   if (file instanceof WorkingDirectoryFileChange) {
+    const ssh = parseSSHRepositoryPath(repository.path)
+    if (ssh !== null) {
+      return new SSHRepositoryReader(ssh).readWorkingFile(
+        file.path,
+        MaxHighlightContentLength - 1
+      )
+    }
     return readPartialFile(
       Path.join(repository.path, file.path),
       0,

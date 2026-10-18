@@ -1,3 +1,17 @@
+# Desktop Plus SSH
+
+Experimental fork of [Desktop Plus](https://github.com/desktop-plus/desktop-plus), based on tag `v3.6.7.2`, adding SSH working-tree repositories to the existing Desktop Plus interface.
+
+Add a remote working tree with **File → Add Local Repository → Connect over SSH**. It appears in the normal repository list, with the native branch/worktree selectors, file and line selection, diff viewer, and stash controls.
+
+Supports everyday Git operations on the server: fetch, pull, push, commit/amend, branch management, worktree creation/move/removal, and stash creation/rename/apply/pop/drop. The toolbar uses the original progress, loading, and ahead/behind states.
+
+**This is an experimental build with write access to the remote working tree.** It uses the server's Git configuration, hooks, signing setup, and credentials. It does not forward your Desktop login tokens or enable SSH agent forwarding.
+
+See [SSH setup, build instructions, verification, and limitations](docs/ssh.md). Tested on macOS Apple Silicon with a Linux SSH server. The upstream installation links below install upstream Desktop Plus, without these SSH changes.
+
+---
+
 # GH Desktop Plus
 
 This is an **up-to-date** fork of [GitHub Desktop](https://desktop.github.com) with additional features and improvements.

@@ -1,3 +1,4 @@
+import { Loading } from '../lib/loading'
 import * as React from 'react'
 
 import { encodePathAsUrl } from '../../lib/path'
@@ -858,20 +859,30 @@ export class NoChanges extends React.Component<
   }
 
   public render() {
+    const loading =
+      this.props.repository.isSSH &&
+      this.props.repositoryState.isPushPullFetchInProgress &&
+      this.props.repositoryState.remote === null
     return (
       <div className="changes-interstitial">
         <div className="content">
           <div className="interstitial-header">
             <div className="text">
-              <h1>No local changes</h1>
+              <h1>{loading ? 'Loading repository' : 'No local changes'}</h1>
               <p>
-                There are no uncommitted changes in this repository. Here are
-                some friendly suggestions for what to do next.
+                {loading ? (
+                  'Reading repository over SSH…'
+                ) : (
+                  <>
+                    There are no uncommitted changes in this repository. Here
+                    are some friendly suggestions for what to do next.
+                  </>
+                )}
               </p>
             </div>
             <img src={PaperStackImage} className="blankslate-image" alt="" />
           </div>
-          {this.renderActions()}
+          {loading ? <Loading /> : this.renderActions()}
         </div>
       </div>
     )

@@ -1,3 +1,4 @@
+import { parseSSHRepositoryPath } from '../../lib/ssh-path'
 import * as React from 'react'
 import * as Path from 'path'
 
@@ -43,7 +44,10 @@ export class DeleteWorktreeFailedDialog extends React.Component<
   }
 
   public render() {
-    const name = Path.basename(this.props.worktreePath)
+    const name = Path.basename(
+      parseSSHRepositoryPath(this.props.worktreePath)?.path ??
+        this.props.worktreePath
+    )
 
     return (
       <Dialog
