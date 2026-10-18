@@ -1,5 +1,7 @@
 import { execFile, ChildProcess } from 'node:child_process'
 import { posix } from 'node:path'
+import { mkdtemp } from 'node:fs/promises'
+import { rmSync } from 'node:fs'
 import { parseSSHRepositoryPath } from './ssh-path'
 
 export interface ISSHConnection {
@@ -14,6 +16,23 @@ export interface ISSHExecutionOptions {
   readonly maxBuffer?: number
   readonly processCallback?: (process: ChildProcess) => void
   readonly env?: { readonly [key: string]: string | undefined | null }
+}
+
+// A short, private socket path avoids macOS's Unix-socket path limit. Each
+// renderer owns its directory; SSH masters exit after 30 seconds without clients.
+let controlDirectory: Promise<string> | undefined
+function getControlDirectory(): Promise<string> {
+  return (controlDirectory ??= mkdtemp('/tmp/desktop-plus-ssh-').then(path => {
+    process.once('exit', () => {
+      try {
+        // eslint-disable-next-line no-sync -- Exit cleanup cannot await filesystem work.
+        rmSync(path, { recursive: true, force: true })
+      } catch {
+        // A crash/forced exit can leave an empty temp directory, never a live cache.
+      }
+    })
+    return path
+  }))
 }
 
 /** Native Git operations run on the host, using its Git configuration and credentials. */
@@ -73,12 +92,13 @@ export function executeSSHGit(
 }
 
 /** No local shell; every argument to the remote shell is quoted separately. */
-export function executeSSHCommand(
+export async function executeSSHCommand(
   connection: ISSHConnection,
   args: ReadonlyArray<string>,
   options: ISSHExecutionOptions = {}
 ): Promise<{ stdout: Buffer; stderr: Buffer; exitCode: number }> {
   validateConnection(connection)
+  const controlPath = `${await getControlDirectory()}/%C`
   const command = `cd ${quote(connection.path)} && ${args.map(quote).join(' ')}`
   return new Promise((resolve, reject) => {
     const child = execFile(
@@ -95,6 +115,12 @@ export function executeSSHCommand(
         'ServerAliveInterval=15',
         '-o',
         'ServerAliveCountMax=2',
+        '-o',
+        'ControlMaster=auto',
+        '-o',
+        'ControlPersist=30s',
+        '-o',
+        `ControlPath=${controlPath}`,
         '--',
         connection.host,
         command,

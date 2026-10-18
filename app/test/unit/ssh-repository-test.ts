@@ -146,6 +146,11 @@ describe('SSH repository native operations', () => {
       sshCalls++
       assert(args.includes('StrictHostKeyChecking=yes'))
       assert(args.includes('BatchMode=yes'))
+      assert(args.includes('ControlMaster=auto'))
+      assert(args.includes('ControlPersist=30s'))
+      const socket = args.find(arg => arg.startsWith('ControlPath='))!
+      assert.match(socket, /^ControlPath=\/tmp\/desktop-plus-ssh-[^/]+\/%C$/)
+      assert(socket.length < 100)
       return originalExecFile(
         '/bin/sh',
         ['-c', args.at(-1)!],
@@ -286,11 +291,21 @@ describe('SSH repository native operations', () => {
       f => f.path === 'tracked.txt'
     )!
     const previous = await readFile(join(repo, file.path))
+    const extraPaths = Array.from({ length: 24 }, (_, i) => `preview-${i}.txt`)
+    await Promise.all(
+      extraPaths.map(p => writeFile(join(repo, p), 'warm me\n'))
+    )
+    const previewFiles = (await getStatus(
+      repository
+    ))!.workingDirectory.files.filter(
+      f => f.id === file.id || extraPaths.includes(f.path)
+    )
+    assert.equal(previewFiles.length, 25)
     const preloader = new SSHDiffPreloader()
     sshPreviewCache.activate(path)
     const before = sshCalls
     try {
-      preloader.schedule(repository, [file], false)
+      preloader.schedule(repository, previewFiles, false)
       const deadline = Date.now() + 5000
       let ready = false
       while (Date.now() < deadline) {
@@ -300,7 +315,35 @@ describe('SSH repository native operations', () => {
         const contents = sshPreviewCache.peek<
           Awaited<ReturnType<typeof getFileContents>>
         >(path, sshContentsKey(file.id))
-        if (diff?.kind === DiffType.Text && contents !== undefined) {
+        const allReady = previewFiles.every(f => {
+          const data = sshPreviewCache.peek<
+            Awaited<ReturnType<typeof getFileContents>>
+          >(path, sshContentsKey(f.id))
+          const warmedDiff = sshPreviewCache.peek<
+            Awaited<ReturnType<typeof getWorkingDirectoryDiff>>
+          >(path, sshDiffKey(f.id, false))
+          if (data === undefined || warmedDiff?.kind !== DiffType.Text)
+            {return false}
+          const prepared =
+            getTextDiffWithBottomDummyHunk(
+              warmedDiff,
+              warmedDiff.hunks,
+              data.oldContents.length,
+              data.newContents.length
+            ) ?? warmedDiff
+          return (
+            peekHighlightContents(data, 4, getLineFilters(prepared.hunks)) !==
+            undefined
+          )
+        })
+        assert(sshPreviewCache.stats.running <= 2)
+        assert(sshPreviewCache.stats.entries <= 128)
+        assert(sshPreviewCache.stats.bytes <= 24 * 1024 * 1024)
+        if (
+          allReady &&
+          diff?.kind === DiffType.Text &&
+          contents !== undefined
+        ) {
           const prepared =
             getTextDiffWithBottomDummyHunk(
               diff,
@@ -388,6 +431,7 @@ describe('SSH repository native operations', () => {
       sshPreviewCache.activate(null)
       globalThis.Worker = previousWorker
       await writeFile(join(repo, file.path), previous)
+      await Promise.all(extraPaths.map(p => rm(join(repo, p), { force: true })))
     }
   })
 

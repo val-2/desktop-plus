@@ -10,10 +10,10 @@ import {
 } from './syntax-highlighting'
 import { getTextDiffWithBottomDummyHunk } from './text-diff-expansion'
 
-/** One progressive preview at a time; the shared queue prioritizes foreground reads. */
+/** Two progressive previews; the shared queue prioritizes foreground reads. */
 export class SSHDiffPreloader {
   private timer: ReturnType<typeof setTimeout> | null = null
-  private request: AbortController | null = null
+  private requests = new Set<AbortController>()
   private pending: WorkingDirectoryFileChange[] = []
   private running = false
   private disposed = false
@@ -36,7 +36,7 @@ export class SSHDiffPreloader {
     ) {
       return
     }
-    const candidates = files.slice(0, 12)
+    const candidates = files.slice(0, 40)
     const key = JSON.stringify([
       repository.path,
       sshPreviewCache.generation,
@@ -69,7 +69,9 @@ export class SSHDiffPreloader {
       this.timer = null
     }
     this.pending = []
-    this.request?.abort()
+    for (const request of this.requests) {
+      request.abort()
+    }
   }
 
   private start() {
@@ -79,76 +81,80 @@ export class SSHDiffPreloader {
   }
 
   private async run(context: NonNullable<SSHDiffPreloader['context']>) {
-    const { repository, hideWhitespace, generation } = context
     this.running = true
     try {
-      while (
-        !this.disposed &&
-        this.context === context &&
-        this.pending.length > 0 &&
-        sshPreviewCache.isCurrent(repository.path, generation)
-      ) {
-        const file = this.pending.shift()!
-        const request = new AbortController()
-        this.request = request
-        try {
-          // Avoid speculative image decodes. Large/binary files retain the native on-demand path.
-          if (/\.(png|jpe?g|gif|webp|ico|bmp|avif|svg|dds)$/i.test(file.path)) {
-            continue
-          }
-          const diff = await sshPreviewCache.get(
-            repository.path,
-            sshDiffKey(file.id, hideWhitespace),
-            signal =>
-              getWorkingDirectoryDiff(repository, file, hideWhitespace, {
-                signal,
-                maxBuffer: 512 * 1024,
-              }),
-            { background: true, signal: request.signal }
-          )
-          if (
-            request.signal.aborted ||
-            !sshPreviewCache.isCurrent(repository.path, generation)
-          ) {
-            break
-          }
-          if (diff.kind !== DiffType.Text) {
-            continue
-          }
-          const contents = await getFileContents(repository, file, {
-            background: true,
-            signal: request.signal,
-          })
-          if (
-            request.signal.aborted ||
-            !sshPreviewCache.isCurrent(repository.path, generation)
-          ) {
-            break
-          }
-          const prepared = contents.canBeExpanded
-            ? getTextDiffWithBottomDummyHunk(
-                diff,
-                diff.hunks,
-                contents.oldContents.length,
-                contents.newContents.length
-              ) ?? diff
-            : diff
-          await highlightContents(contents, 4, getLineFilters(prepared.hunks), {
-            background: true,
-            signal: request.signal,
-          })
-        } catch {
-          // Speculation must not surface errors or interfere with normal on-demand reads.
-        } finally {
-          if (this.request === request) {
-            this.request = null
-          }
-        }
-      }
+      await Promise.all([this.warmNext(context), this.warmNext(context)])
     } finally {
       this.running = false
       if (this.pending.length > 0 && this.context !== context) {
         this.start()
+      }
+    }
+  }
+
+  private async warmNext(context: NonNullable<SSHDiffPreloader['context']>) {
+    const { repository, hideWhitespace, generation } = context
+    while (
+      !this.disposed &&
+      this.context === context &&
+      this.pending.length > 0 &&
+      sshPreviewCache.isCurrent(repository.path, generation)
+    ) {
+      const file = this.pending.shift()!
+      const request = new AbortController()
+      this.requests.add(request)
+      try {
+        // Avoid speculative image decodes. Large/binary files retain the native on-demand path.
+        if (/\.(png|jpe?g|gif|webp|ico|bmp|avif|svg|dds)$/i.test(file.path)) {
+          continue
+        }
+        const diff = await sshPreviewCache.get(
+          repository.path,
+          sshDiffKey(file.id, hideWhitespace),
+          signal =>
+            getWorkingDirectoryDiff(repository, file, hideWhitespace, {
+              signal,
+              maxBuffer: 512 * 1024,
+            }),
+          { background: true, signal: request.signal }
+        )
+        if (
+          this.context !== context ||
+          request.signal.aborted ||
+          !sshPreviewCache.isCurrent(repository.path, generation)
+        ) {
+          break
+        }
+        if (diff.kind !== DiffType.Text) {
+          continue
+        }
+        const contents = await getFileContents(repository, file, {
+          background: true,
+          signal: request.signal,
+        })
+        if (
+          this.context !== context ||
+          request.signal.aborted ||
+          !sshPreviewCache.isCurrent(repository.path, generation)
+        ) {
+          break
+        }
+        const prepared = contents.canBeExpanded
+          ? getTextDiffWithBottomDummyHunk(
+              diff,
+              diff.hunks,
+              contents.oldContents.length,
+              contents.newContents.length
+            ) ?? diff
+          : diff
+        await highlightContents(contents, 4, getLineFilters(prepared.hunks), {
+          background: true,
+          signal: request.signal,
+        })
+      } catch {
+        // Speculation must not surface errors or interfere with normal on-demand reads.
+      } finally {
+        this.requests.delete(request)
       }
     }
   }

@@ -24,11 +24,13 @@ The repository appears in the regular list with an SSH suffix, retained even aft
 
 During initial loading, the toolbar and empty changes panel display loading feedback instead of incorrectly suggesting Publish repository. Publish branch remains appropriate for a branch without an upstream.
 
+SSH commands reuse an OpenSSH connection through a private temporary control-socket directory. Idle connections close after 30 seconds; normal process exit removes its socket directory. Host-key checks and authentication remain enabled. This avoids repeating connection setup for every diff and source read.
+
 ## Progressive SSH previews
 
-The changes list progressively prepares diffs, source contents, and syntax tokens for up to 12 nearby/visible files. Scrolling and selection reprioritize that window; cold foreground reads have priority over queued speculation. Ready previews initialize the original diff components synchronously, without fetching their contents again.
+The changes list progressively prepares diffs, source contents, and syntax tokens for up to 40 files, starting with nearby/visible files and continuing through the remaining filtered list. Scrolling and selection reprioritize that window; cold foreground reads have priority over queued speculation. Ready previews initialize the original diff components synchronously, without fetching their contents again.
 
-The display cache is limited to 48 entries and an estimated retained-data budget of 24 MiB (8 MiB per entry), with at most two preview loaders active. This is a cache budget, not a cap on the entire Electron process or exact JavaScript heap size. A content loader may read its two sides in parallel. Completed previews remain available for the current status snapshot; status refreshes and repository/worktree changes invalidate them, including changes that leave the same Git status code. Scrolling prioritizes the visible files when the selected file is outside the viewport.
+The display cache is limited to 128 entries and an estimated retained-data budget of 24 MiB (8 MiB per entry), with two files prepared concurrently and at most two preview loaders active. This is a cache budget, not a cap on the entire Electron process or exact JavaScript heap size. A content loader may read its two sides in parallel. Completed previews remain available for the current status snapshot; status refreshes and repository/worktree changes invalidate them, including changes that leave the same Git status code. Scrolling prioritizes the visible files when the selected file is outside the viewport.
 
 Large speculative diffs are capped at 512 KiB and image decodes are not speculatively warmed. If a user selects a file whose speculative read failed, the normal foreground read is retried with its normal limits. Cold, large, or uncached files can still have SSH latency.
 
