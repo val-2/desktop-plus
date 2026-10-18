@@ -12,6 +12,8 @@ type Entry = {
   expires: number
 }
 
+export const SSHPreviewConcurrency = 5
+
 export const sshPreviewAborted = () =>
   Object.assign(new Error('SSH preview superseded'), { name: 'AbortError' })
 
@@ -193,7 +195,7 @@ export class SSHPreviewCache {
   }
 
   private drain() {
-    while (this.running < 2 && this.queue.length > 0) {
+    while (this.running < SSHPreviewConcurrency && this.queue.length > 0) {
       const entry = this.queue.shift()!
       const load = entry.load
       entry.load = null

@@ -2,7 +2,11 @@ import { Repository } from '../../models/repository'
 import { WorkingDirectoryFileChange } from '../../models/status'
 import { DiffType } from '../../models/diff'
 import { getWorkingDirectoryDiff } from '../../lib/git/diff'
-import { sshPreviewCache, sshDiffKey } from '../../lib/ssh-preview-cache'
+import {
+  sshPreviewCache,
+  sshDiffKey,
+  SSHPreviewConcurrency,
+} from '../../lib/ssh-preview-cache'
 import {
   getFileContents,
   highlightContents,
@@ -10,7 +14,7 @@ import {
 } from './syntax-highlighting'
 import { getTextDiffWithBottomDummyHunk } from './text-diff-expansion'
 
-/** Two progressive previews; the shared queue prioritizes foreground reads. */
+/** Five progressive previews; the shared queue prioritizes foreground reads. */
 export class SSHDiffPreloader {
   private timer: ReturnType<typeof setTimeout> | null = null
   private requests = new Set<AbortController>()
@@ -83,7 +87,11 @@ export class SSHDiffPreloader {
   private async run(context: NonNullable<SSHDiffPreloader['context']>) {
     this.running = true
     try {
-      await Promise.all([this.warmNext(context), this.warmNext(context)])
+      await Promise.all(
+        Array.from({ length: SSHPreviewConcurrency }, () =>
+          this.warmNext(context)
+        )
+      )
     } finally {
       this.running = false
       if (this.pending.length > 0 && this.context !== context) {

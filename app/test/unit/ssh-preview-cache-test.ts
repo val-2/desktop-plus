@@ -1,7 +1,10 @@
 import { describe, it, mock } from 'node:test'
 import assert from 'node:assert/strict'
 import { getEventListeners } from 'node:events'
-import { SSHPreviewCache } from '../../src/lib/ssh-preview-cache'
+import {
+  SSHPreviewCache,
+  SSHPreviewConcurrency,
+} from '../../src/lib/ssh-preview-cache'
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -58,81 +61,97 @@ describe('bounded SSH preview cache', () => {
     }
   })
 
-  it('limits active loaders to two and prioritizes user selections over queued speculation', async () => {
+  it('limits active loaders to five and prioritizes user selections over queued speculation', async () => {
     const cache = new SSHPreviewCache()
     cache.activate('repo')
-    const gates = [
-      deferred<string>(),
-      deferred<string>(),
-      deferred<string>(),
-      deferred<string>(),
-    ]
+    const gates = Array.from({ length: SSHPreviewConcurrency + 2 }, () =>
+      deferred<string>()
+    )
     const started: number[] = []
     const load = (n: number) => async () => {
       started.push(n)
       return gates[n].promise
     }
-    const first = cache.get('repo', 'first', load(0))
-    const second = cache.get('repo', 'second', load(1))
-    const background = cache.get('repo', 'background', load(2), {
-      background: true,
-    })
-    const selected = cache.get('repo', 'selected', load(3))
-    assert.deepEqual(started, [0, 1])
-    assert.equal(cache.stats.running, 2)
-    gates[0].resolve('a')
-    await first
+    const active = Array.from({ length: SSHPreviewConcurrency }, (_, n) =>
+      cache.get('repo', `active-${n}`, load(n))
+    )
+    const background = cache.get(
+      'repo',
+      'background',
+      load(SSHPreviewConcurrency),
+      {
+        background: true,
+      }
+    )
+    const selected = cache.get(
+      'repo',
+      'selected',
+      load(SSHPreviewConcurrency + 1)
+    )
+    assert.deepEqual(
+      started,
+      Array.from({ length: SSHPreviewConcurrency }, (_, n) => n)
+    )
+    assert.equal(cache.stats.running, SSHPreviewConcurrency)
+    gates[0].resolve('released')
+    await active[0]
     await tick()
-    assert.deepEqual(started, [0, 1, 3])
-    gates[1].resolve('b')
-    gates[2].resolve('c')
-    gates[3].resolve('d')
-    await Promise.all([second, background, selected])
+    assert.deepEqual(started, [
+      ...Array.from({ length: SSHPreviewConcurrency }, (_, n) => n),
+      SSHPreviewConcurrency + 1,
+    ])
+    gates[SSHPreviewConcurrency + 1].resolve('selected')
+    await selected
+    for (let n = 1; n < SSHPreviewConcurrency; n++) {
+      gates[n].resolve(`active-${n}`)
+    }
+    await Promise.all(active.slice(1))
+    await tick()
+    gates[SSHPreviewConcurrency].resolve('background')
+    await background
     assert.equal(cache.stats.running, 0)
   })
 
   it('aborts active/queued reads and refuses late results after a worktree switch', async () => {
     const cache = new SSHPreviewCache()
     cache.activate('old')
-    const gates = [deferred<string>(), deferred<string>()]
+    const gates = Array.from({ length: SSHPreviewConcurrency }, () =>
+      deferred<string>()
+    )
     const signals: AbortSignal[] = []
-    const a = cache.get('old', 'a', signal => {
-      signals.push(signal)
-      return gates[0].promise
-    })
-    const b = cache.get('old', 'b', signal => {
-      signals.push(signal)
-      return gates[1].promise
-    })
+    const active = gates.map((gate, index) =>
+      cache.get('old', `active-${index}`, signal => {
+        signals.push(signal)
+        return gate.promise
+      })
+    )
     let queuedStarted = false
-    const c = cache.get('old', 'c', async () => {
+    const queued = cache.get('old', 'queued', async () => {
       queuedStarted = true
-      return 'c'
+      return 'queued'
     })
-    const rejected = [a, b, c].map(p =>
+    const rejected = [...active, queued].map(p =>
       assert.rejects(p, { name: 'AbortError' })
     )
     cache.activate('new')
     await Promise.all(rejected)
     assert(signals.every(s => s.aborted))
     assert.equal(queuedStarted, false)
-    gates[0].resolve('old a')
-    gates[1].resolve('old b')
+    gates.forEach((gate, index) => gate.resolve(`old ${index}`))
     await tick()
-    assert.equal(cache.peek('new', 'a'), undefined)
+    assert.equal(cache.peek('new', 'active-0'), undefined)
     assert.equal(cache.stats.entries, 0)
-    assert.equal(await cache.get('new', 'a', async () => 'new a'), 'new a')
-    assert.equal(cache.peek('new', 'a'), 'new a')
+    assert.equal(await cache.get('new', 'active-0', async () => 'new'), 'new')
+    assert.equal(cache.peek('new', 'active-0'), 'new')
   })
 
   it('cancels a queued request without spawning it or retaining its listener', async () => {
     const cache = new SSHPreviewCache()
     cache.activate('repo')
     const gate = deferred<string>()
-    const active = [
-      cache.get('repo', 'a', () => gate.promise),
-      cache.get('repo', 'b', () => gate.promise),
-    ]
+    const active = Array.from({ length: SSHPreviewConcurrency }, (_, n) =>
+      cache.get('repo', `active-${n}`, () => gate.promise)
+    )
     const controller = new AbortController()
     const queued = cache.get(
       'repo',

@@ -2,6 +2,7 @@ import {
   sshPreviewCache,
   sshDiffKey,
   sshContentsKey,
+  SSHPreviewConcurrency,
 } from '../../src/lib/ssh-preview-cache'
 import { SSHDiffPreloader } from '../../src/ui/diff/ssh-diff-preloader'
 import {
@@ -322,8 +323,9 @@ describe('SSH repository native operations', () => {
           const warmedDiff = sshPreviewCache.peek<
             Awaited<ReturnType<typeof getWorkingDirectoryDiff>>
           >(path, sshDiffKey(f.id, false))
-          if (data === undefined || warmedDiff?.kind !== DiffType.Text)
-            {return false}
+          if (data === undefined || warmedDiff?.kind !== DiffType.Text) {
+            return false
+          }
           const prepared =
             getTextDiffWithBottomDummyHunk(
               warmedDiff,
@@ -336,7 +338,7 @@ describe('SSH repository native operations', () => {
             undefined
           )
         })
-        assert(sshPreviewCache.stats.running <= 2)
+        assert(sshPreviewCache.stats.running <= SSHPreviewConcurrency)
         assert(sshPreviewCache.stats.entries <= 128)
         assert(sshPreviewCache.stats.bytes <= 24 * 1024 * 1024)
         if (
