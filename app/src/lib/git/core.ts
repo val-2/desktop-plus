@@ -82,6 +82,9 @@ export interface IGitExecutionOptions
   /** Should it track & report LFS progress? */
   readonly trackLFSProgress?: boolean
 
+  /** Cancellation of read-only SSH previews. */
+  readonly signal?: AbortSignal
+
   /**
    * Whether the command about to run is part of a background task or not.
    * This affects error handling and UI such as credential prompts.
@@ -237,6 +240,7 @@ export async function git(
         options?.encoding === 'buffer'
           ? undefined
           : options?.encoding ?? 'utf8',
+      signal: options?.signal,
       stdin: options?.stdin,
       maxBuffer: options?.maxBuffer,
       env: options?.env,

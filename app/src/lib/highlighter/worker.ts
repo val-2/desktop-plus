@@ -32,8 +32,14 @@ export function highlight(
   basename: string,
   extension: string,
   tabSize: number,
-  lines: Array<number>
+  lines: Array<number>,
+  signal?: AbortSignal
 ): Promise<ITokens> {
+  if (signal?.aborted) {
+    return Promise.reject(
+      Object.assign(new Error('Highlight cancelled'), { name: 'AbortError' })
+    )
+  }
   // Bail early if there's no content to highlight or if we don't
   // need any lines from this file.
   if (!contentLines.length || !lines.length) {
@@ -53,14 +59,28 @@ export function highlight(
       }
     }
 
-    worker.onerror = ev => {
+    const cleanup = () => {
       clearTimeout()
+      signal?.removeEventListener('abort', abort)
+      worker.onmessage = null
+      worker.onerror = null
+    }
+    const abort = () => {
+      cleanup()
+      worker.terminate()
+      reject(
+        Object.assign(new Error('Highlight cancelled'), { name: 'AbortError' })
+      )
+    }
+    signal?.addEventListener('abort', abort, { once: true })
+    worker.onerror = ev => {
+      cleanup()
       worker.terminate()
       reject(ev.error || new Error(ev.message))
     }
 
     worker.onmessage = ev => {
-      clearTimeout()
+      cleanup()
       if (highlightWorkers.length < maxIdlingWorkers) {
         highlightWorkers.push(worker)
       } else {
@@ -78,9 +98,17 @@ export function highlight(
       addModeClass: true,
     }
 
-    worker.postMessage(request)
+    try {
+      worker.postMessage(request)
+    } catch (error) {
+      cleanup()
+      worker.terminate()
+      reject(error)
+      return
+    }
 
     timeout = window.setTimeout(() => {
+      cleanup()
       worker.terminate()
       reject(new Error('timed out'))
     }, workerMaxRunDuration)

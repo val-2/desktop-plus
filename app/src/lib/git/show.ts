@@ -80,13 +80,15 @@ export async function getPartialBlobContents(
   repository: Repository,
   commitish: string,
   path: string,
-  length: number
+  length: number,
+  signal?: AbortSignal
 ): Promise<Buffer | null> {
   return getPartialBlobContentsCatchPathNotInRef(
     repository,
     commitish,
     path,
-    length
+    length,
+    signal
   )
 }
 
@@ -94,13 +96,15 @@ export async function getPartialBlobContentsCatchPathNotInRef(
   repository: Repository,
   commitish: string,
   path: string,
-  length: number
+  length: number,
+  signal?: AbortSignal
 ): Promise<Buffer | null> {
   const revision = await resolveBlobRevision(repository, commitish)
   const args = ['show', `${revision}:${path}`]
 
   return git(args, repository.path, 'getPartialBlobContentsCatchPathNotInRef', {
     maxBuffer: length,
+    signal,
     expectedErrors: new Set([GitError.PathExistsButNotInRef]),
     encoding: 'buffer',
   })

@@ -348,6 +348,7 @@ export class RepositoryView extends React.Component<
 
     return (
       <ChangesSidebar
+        hideWhitespaceInDiff={this.props.hideWhitespaceInChangesDiff}
         ref={this.changesSidebarRef}
         repository={this.props.repository}
         dispatcher={this.props.dispatcher}

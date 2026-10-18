@@ -12,6 +12,7 @@ import {
 import {
   getLineFilters,
   highlightContents,
+  peekHighlightContents,
   IFileContents,
 } from './syntax-highlighting'
 import { ITokens, ILineTokens, IToken } from '../../lib/highlighter/types'
@@ -313,10 +314,23 @@ export class SideBySideDiff extends React.Component<
     IRowSelectableGroupStaticData
   >()
 
+  private unmounted = false
+  private highlightRequest: AbortController | null = null
+
   public constructor(props: ISideBySideDiffProps) {
     super(props)
 
+    const cached =
+      props.fileContents === null
+        ? undefined
+        : peekHighlightContents(
+            props.fileContents,
+            4,
+            getLineFilters(props.diff.hunks)
+          )
     this.state = {
+      beforeTokens: cached?.oldTokens,
+      afterTokens: cached?.newTokens,
       diff: props.diff,
       isSearching: false,
       selectedSearchResult: undefined,
@@ -471,6 +485,8 @@ export class SideBySideDiff extends React.Component<
   }
 
   public componentWillUnmount() {
+    this.unmounted = true
+    this.highlightRequest?.abort()
     if (this.pendingWidthMeasurement !== null) {
       cancelAnimationFrame(this.pendingWidthMeasurement)
       this.pendingWidthMeasurement = null
@@ -1425,7 +1441,32 @@ export class SideBySideDiff extends React.Component<
     const lineFilters = getLineFilters(currentDiff.hunks)
     const tabSize = 4
 
-    const tokens = await highlightContents(contents, tabSize, lineFilters)
+    this.highlightRequest?.abort()
+    const request = new AbortController()
+    this.highlightRequest = request
+    let tokens
+    try {
+      tokens =
+        peekHighlightContents(contents, tabSize, lineFilters) ??
+        (await highlightContents(contents, tabSize, lineFilters, {
+          signal: request.signal,
+        }))
+    } catch (error) {
+      if (
+        !request.signal.aborted &&
+        !(error instanceof Error && error.name === 'AbortError')
+      ) {
+        log.error('Could not highlight SSH preview', error)
+      }
+      return
+    } finally {
+      if (this.highlightRequest === request) {
+        this.highlightRequest = null
+      }
+    }
+    if (this.unmounted || request.signal.aborted) {
+      return
+    }
 
     if (
       !highlightParametersEqual(

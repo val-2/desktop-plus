@@ -44,6 +44,7 @@ import { HookProgress } from '../../lib/git'
 const UndoCommitAnimationTimeout = 500
 
 interface IChangesSidebarProps {
+  readonly hideWhitespaceInDiff?: boolean
   readonly repository: Repository
   readonly changes: IChangesState
   readonly aheadBehind: IAheadBehind | null
@@ -455,6 +456,7 @@ export class ChangesSidebar extends React.Component<IChangesSidebarProps, {}> {
     return (
       <div className="panel" role="tabpanel" aria-labelledby="changes-tab">
         <FilterChangesList
+          hideWhitespaceInDiff={this.props.hideWhitespaceInDiff}
           ref={this.changesListRef}
           dispatcher={this.props.dispatcher}
           repository={this.props.repository}

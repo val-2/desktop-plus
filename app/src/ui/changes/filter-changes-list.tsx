@@ -1,3 +1,4 @@
+import { SSHDiffPreloader } from '../diff/ssh-diff-preloader'
 import * as React from 'react'
 import * as Path from 'path'
 
@@ -117,6 +118,7 @@ const StashIcon: OcticonSymbolVariant = {
 const GitIgnoreFileName = '.gitignore'
 
 interface IFilterChangesListProps {
+  readonly hideWhitespaceInDiff?: boolean
   readonly repository: Repository
   readonly repositoryAccount: Account | null
   readonly workingDirectory: WorkingDirectoryStatus
@@ -348,6 +350,10 @@ export class FilterChangesList extends React.Component<
   IFilterChangesListProps,
   IFilterChangesListState
 > {
+  private readonly sshPreloader = new SSHDiffPreloader()
+  private previewScrollTop = 0
+  private previewHeight = 600
+
   private filterTextBox: TextBox | undefined = undefined
   private headerRef = createObservableRef<HTMLDivElement>()
   private includeAllCheckBoxRef = React.createRef<Checkbox>()
@@ -493,6 +499,53 @@ export class FilterChangesList extends React.Component<
       collapsedFolders: new Set(),
       collapsedFoldersWhileFiltering: { filter: null, folders: new Set() },
     }
+  }
+
+  public componentDidMount() {
+    this.preloadVisibleFiles()
+  }
+  public componentDidUpdate() {
+    this.preloadVisibleFiles()
+  }
+  public componentWillUnmount() {
+    this.sshPreloader.dispose()
+  }
+
+  private preloadVisibleFiles() {
+    if (!this.props.repository.isSSH || this.props.isShowingStashEntry) {
+      return
+    }
+    let row = 0
+    const first = Math.max(0, Math.floor(this.previewScrollTop / RowHeight) - 2)
+    const last = first + Math.ceil(this.previewHeight / RowHeight) + 4
+    const files: WorkingDirectoryFileChange[] = []
+    for (const group of this.getGroups()) {
+      if (group.showHeader) {
+        row++
+      }
+      for (const item of group.items) {
+        if (
+          row >= first &&
+          row <= last &&
+          this.state.filteredItems.has(item.id)
+        ) {
+          files.push(item.change)
+        }
+        row++
+      }
+    }
+    const all = this.props.workingDirectory.files
+    const selected = all.findIndex(f =>
+      this.props.selectedFileIDs.includes(f.id)
+    )
+    const nearby =
+      selected < 0 ? [] : all.slice(Math.max(0, selected - 1), selected + 5)
+    const unique = new Map([...nearby, ...files].map(f => [f.id, f]))
+    this.sshPreloader.schedule(
+      this.props.repository,
+      [...unique.values()],
+      this.props.hideWhitespaceInDiff ?? false
+    )
   }
 
   public componentWillReceiveProps(nextProps: IFilterChangesListProps) {
@@ -1264,7 +1317,10 @@ export class FilterChangesList extends React.Component<
     }
   }
 
-  private onScroll = (scrollTop: number, _clientHeight: number) => {
+  private onScroll = (scrollTop: number, clientHeight: number) => {
+    this.previewScrollTop = scrollTop
+    this.previewHeight = clientHeight
+    this.preloadVisibleFiles()
     this.props.onChangesListScrolled(scrollTop)
   }
 

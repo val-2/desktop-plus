@@ -161,7 +161,8 @@ export class SSHRepositoryReader {
 
   public async readWorkingFile(
     path: string,
-    length = 1024 * 1024
+    length = 1024 * 1024,
+    signal?: AbortSignal
   ): Promise<Buffer> {
     if (
       posix.isAbsolute(path) ||
@@ -173,13 +174,11 @@ export class SSHRepositoryReader {
     if (!Number.isInteger(length) || length < 1 || length > 8 * 1024 * 1024) {
       throw new Error('Invalid remote file read limit.')
     }
-    const result = await executeSSHCommand(this.connection, [
-      'head',
-      '-c',
-      String(length),
-      '--',
-      path,
-    ])
+    const result = await executeSSHCommand(
+      this.connection,
+      ['head', '-c', String(length), '--', path],
+      { signal }
+    )
     if (result.exitCode !== 0) {
       throw new Error(result.stderr.toString('utf8'))
     }

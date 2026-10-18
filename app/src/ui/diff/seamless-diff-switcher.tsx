@@ -1,3 +1,4 @@
+import { sshPreviewCache } from '../../lib/ssh-preview-cache'
 import * as React from 'react'
 import classNames from 'classnames'
 
@@ -17,7 +18,11 @@ import {
   ILargeTextDiff,
 } from '../../models/diff'
 import { Loading } from '../lib/loading'
-import { getFileContents, IFileContents } from './syntax-highlighting'
+import {
+  getFileContents,
+  peekFileContents,
+  IFileContents,
+} from './syntax-highlighting'
 import { getTextDiffWithBottomDummyHunk } from './text-diff-expansion'
 import { textDiffEquals } from './diff-helpers'
 import noop from 'lodash/noop'
@@ -196,6 +201,19 @@ function isTextDiff(diff: IDiff): diff is ITextDiff | ILargeTextDiff {
   return diff.kind === DiffType.Text || diff.kind === DiffType.LargeText
 }
 
+const prepareContentsDiff = (
+  diff: ITextDiff | ILargeTextDiff,
+  contents: IFileContents
+) =>
+  contents.canBeExpanded && diff.kind === DiffType.Text
+    ? getTextDiffWithBottomDummyHunk(
+        diff,
+        diff.hunks,
+        contents.oldContents.length,
+        contents.newContents.length
+      ) ?? diff
+    : diff
+
 /**
  * A component which attempts to minimize the need for unmounting
  * and remounting text diff components with the ultimate goal of
@@ -211,8 +229,19 @@ export class SeamlessDiffSwitcher extends React.Component<
   ): Partial<ISeamlessDiffSwitcherState> {
     const sameFile =
       state.fileContents !== null &&
-      isSameFile(state.fileContents.file, props.file)
-    const fileContents = sameFile ? state.fileContents : null
+      isSameFile(state.fileContents.file, props.file) &&
+      (!(
+        props.repository.isSSH &&
+        props.file instanceof WorkingDirectoryFileChange &&
+        props.externalFileContents === undefined
+      ) ||
+        (state.fileContents.sshScope === props.repository.path &&
+          state.fileContents.sshGeneration === sshPreviewCache.generation))
+    const cached =
+      props.externalFileContents === undefined
+        ? peekFileContents(props.repository, props.file)
+        : undefined
+    const fileContents = cached ?? (sameFile ? state.fileContents : null)
     // If it's a text diff, we'll consider it loaded once the contents of the old
     // and new files have been loaded.
     const isLoadingDiff =
@@ -220,7 +249,15 @@ export class SeamlessDiffSwitcher extends React.Component<
     const beganOrFinishedLoadingDiff = isLoadingDiff !== state.isLoadingDiff
     // If the props diff is not a text diff, just pass it along to the state.
     const diff =
-      props.diff !== null && !isTextDiff(props.diff) ? props.diff : state.diff
+      cached !== undefined && props.diff !== null && isTextDiff(props.diff)
+        ? state.fileContents === cached &&
+          props.diff === state.propSnapshot.diff &&
+          state.diff !== null
+          ? state.diff
+          : prepareContentsDiff(props.diff, cached)
+        : props.diff !== null && !isTextDiff(props.diff)
+        ? props.diff
+        : state.diff
 
     return {
       isLoadingDiff,
@@ -234,6 +271,8 @@ export class SeamlessDiffSwitcher extends React.Component<
     }
   }
 
+  private unmounted = false
+  private fileContentsRequest: AbortController | null = null
   private wholeFileExpansionAvailable = false
   private slowLoadingTimeoutId: number | null = null
 
@@ -246,14 +285,22 @@ export class SeamlessDiffSwitcher extends React.Component<
     // It's loading the diff if (1) there is no diff or (2) we have a diff but
     // it's a text diff. In that case we need to load the contents of the old
     // and new files before considering it loaded.
-    const isLoadingDiff = props.diff === null || isTextDiff(props.diff)
+    const cached =
+      props.externalFileContents === undefined
+        ? peekFileContents(props.repository, props.file)
+        : undefined
+    const isLoadingDiff =
+      props.diff === null || (isTextDiff(props.diff) && cached === undefined)
 
     this.state = {
       isLoadingDiff,
       isLoadingSlow: false,
       propSnapshot: props,
-      diff: props.diff,
-      fileContents: null,
+      diff:
+        cached !== undefined && props.diff !== null && isTextDiff(props.diff)
+          ? prepareContentsDiff(props.diff, cached)
+          : props.diff,
+      fileContents: cached ?? null,
     }
   }
 
@@ -266,6 +313,8 @@ export class SeamlessDiffSwitcher extends React.Component<
   }
 
   public componentWillUnmount() {
+    this.unmounted = true
+    this.fileContentsRequest?.abort()
     this.clearSlowLoadingTimeout()
     this.notifyWholeFileExpansionAvailability(false)
   }
@@ -302,6 +351,14 @@ export class SeamlessDiffSwitcher extends React.Component<
     const currentFileContents = this.state.fileContents
     if (
       currentFileContents !== null &&
+      this.props.externalFileContents === undefined &&
+      peekFileContents(this.props.repository, fileToLoad) ===
+        currentFileContents
+    ) {
+      return
+    }
+    if (
+      currentFileContents !== null &&
       isSameFile(currentFileContents.file, fileToLoad) &&
       prevDiff !== null &&
       isSameDiff(prevDiff, diff)
@@ -335,36 +392,51 @@ export class SeamlessDiffSwitcher extends React.Component<
 
     this.loadingState = { file: fileToLoad, diff }
 
-    const fileContents = await getFileContents(
-      this.props.repository,
-      fileToLoad
-    )
-
-    this.loadingState = null
-
-    // Has the file changed while we've been reading it?
-    if (!isSameFile(fileToLoad, this.props.file)) {
-      return
+    this.fileContentsRequest?.abort()
+    const request = new AbortController()
+    this.fileContentsRequest = request
+    try {
+      const fileContents = await getFileContents(
+        this.props.repository,
+        fileToLoad,
+        { signal: request.signal }
+      )
+      if (
+        this.unmounted ||
+        this.fileContentsRequest !== request ||
+        !isSameFile(fileToLoad, this.props.file)
+      ) {
+        return
+      }
+      this.loadingState = null
+      this.applyFileContents(diff, fileContents)
+    } catch (error) {
+      if (
+        !request.signal.aborted &&
+        !this.unmounted &&
+        !(error instanceof Error && error.name === 'AbortError')
+      ) {
+        log.error('Could not load SSH preview contents', error)
+      }
+    } finally {
+      if (this.fileContentsRequest === request) {
+        this.fileContentsRequest = null
+        this.loadingState = null
+      }
     }
-
-    this.applyFileContents(diff, fileContents)
   }
 
   private applyFileContents(
     diff: ITextDiff | ILargeTextDiff,
     fileContents: IFileContents
   ) {
-    const newDiff =
-      fileContents.canBeExpanded && diff.kind === DiffType.Text
-        ? getTextDiffWithBottomDummyHunk(
-            diff,
-            diff.hunks,
-            fileContents.oldContents.length,
-            fileContents.newContents.length
-          )
-        : null
-
-    this.setState({ diff: newDiff ?? diff, fileContents })
+    if (this.unmounted) {
+      return
+    }
+    this.setState({
+      diff: prepareContentsDiff(diff, fileContents),
+      fileContents,
+    })
   }
 
   private onSlowLoadingTimeout = () => {

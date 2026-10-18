@@ -1,3 +1,18 @@
+import {
+  sshPreviewCache,
+  sshDiffKey,
+  sshContentsKey,
+} from '../../src/lib/ssh-preview-cache'
+import { SSHDiffPreloader } from '../../src/ui/diff/ssh-diff-preloader'
+import {
+  getFileContents,
+  peekHighlightContents,
+  getLineFilters,
+} from '../../src/ui/diff/syntax-highlighting'
+import { getTextDiffWithBottomDummyHunk } from '../../src/ui/diff/text-diff-expansion'
+import { SeamlessDiffSwitcher } from '../../src/ui/diff/seamless-diff-switcher'
+import { SideBySideDiff } from '../../src/ui/diff/side-by-side-diff'
+import type * as React from 'react'
 import type { GitHubRepository } from '../../src/models/github-repository'
 import { RepositoriesStore } from '../../src/lib/stores/repositories-store'
 import { TestRepositoriesDatabase } from '../helpers/databases'
@@ -81,6 +96,7 @@ describe('SSH repository native operations', () => {
   let root: string
   let repo: string
   let reader: SSHRepositoryReader
+  let sshCalls = 0
   const originalExecFile = childProcess.execFile
   const git = (...args: string[]) =>
     childProcess.execFileSync('/usr/bin/git', ['-C', repo, ...args], {
@@ -127,6 +143,7 @@ describe('SSH repository native operations', () => {
         assert(!('cwd' in options) || !String(options.cwd).startsWith('ssh:'))
         return originalExecFile(file, args, options, callback)
       }
+      sshCalls++
       assert(args.includes('StrictHostKeyChecking=yes'))
       assert(args.includes('BatchMode=yes'))
       return originalExecFile(
@@ -225,6 +242,152 @@ describe('SSH repository native operations', () => {
       const patch = await getCommitDiff(repository, saved, saved.commitish)
       assert.equal(patch.kind, 0)
       assert('hunks' in patch && patch.hunks.length > 0)
+    }
+  })
+
+  it('progressively warms native diffs, contents and tokens without caching mutation reads or retaining workers', async () => {
+    const workers: {
+      onmessage: ((event: { data: object }) => void) | null
+      onerror: unknown
+      terminate: () => void
+    }[] = []
+    const previousWorker = globalThis.Worker
+    class PreviewWorker {
+      public onmessage: ((event: { data: object }) => void) | null = null
+      public onerror: unknown = null
+      private timer: ReturnType<typeof setTimeout> | null = null
+      public constructor() {
+        workers.push(this)
+      }
+      public postMessage(request: { lines: number[] }) {
+        this.timer = setTimeout(() => {
+          this.timer = null
+          this.onmessage?.({
+            data: Object.fromEntries(
+              request.lines.map(line => [
+                line,
+                { 0: { length: 1, token: 'test-token' } },
+              ])
+            ),
+          })
+        }, 1)
+      }
+      public terminate() {
+        if (this.timer !== null) {
+          clearTimeout(this.timer)
+          this.timer = null
+        }
+      }
+    }
+    globalThis.Worker = PreviewWorker as unknown as typeof Worker
+    const path = sshRepositoryPath({ host: 'test-alias', path: repo })
+    const repository = new Repository(path, 1, null, false)
+    const file = (await getStatus(repository))!.workingDirectory.files.find(
+      f => f.path === 'tracked.txt'
+    )!
+    const previous = await readFile(join(repo, file.path))
+    const preloader = new SSHDiffPreloader()
+    sshPreviewCache.activate(path)
+    const before = sshCalls
+    try {
+      preloader.schedule(repository, [file], false)
+      const deadline = Date.now() + 5000
+      let ready = false
+      while (Date.now() < deadline) {
+        const diff = sshPreviewCache.peek<
+          Awaited<ReturnType<typeof getWorkingDirectoryDiff>>
+        >(path, sshDiffKey(file.id, false))
+        const contents = sshPreviewCache.peek<
+          Awaited<ReturnType<typeof getFileContents>>
+        >(path, sshContentsKey(file.id))
+        if (diff?.kind === DiffType.Text && contents !== undefined) {
+          const prepared =
+            getTextDiffWithBottomDummyHunk(
+              diff,
+              diff.hunks,
+              contents.oldContents.length,
+              contents.newContents.length
+            ) ?? diff
+          const tokens = peekHighlightContents(
+            contents,
+            4,
+            getLineFilters(prepared.hunks)
+          )
+          if (tokens !== undefined) {
+            assert(Object.keys(tokens.newTokens).length > 0)
+            const callsBeforeSelection = sshCalls
+            const cachedDiff = await sshPreviewCache.get(
+              path,
+              sshDiffKey(file.id, false),
+              async () => {
+                assert.fail('Ready diff was fetched again')
+              }
+            )
+            assert.equal(cachedDiff, diff)
+            assert.equal(await getFileContents(repository, file), contents)
+            const props = { repository, file, diff } as React.ComponentProps<
+              typeof SeamlessDiffSwitcher
+            >
+            const switcher = new SeamlessDiffSwitcher(props)
+            assert.equal(switcher.state.isLoadingDiff, false)
+            const viewer = new SideBySideDiff({
+              diff: prepared,
+              fileContents: contents,
+            } as React.ComponentProps<typeof SideBySideDiff>)
+            assert.equal(viewer.state.afterTokens, tokens.newTokens)
+            assert.equal(
+              sshCalls,
+              callsBeforeSelection,
+              'Warm selection performs no SSH requests'
+            )
+            await writeFile(
+              join(repo, file.path),
+              'cache must not affect write operations\n'
+            )
+            const uncached = await getWorkingDirectoryDiff(repository, file)
+            assert(
+              'text' in uncached &&
+                uncached.text.includes('cache must not affect write operations')
+            )
+            sshPreviewCache.invalidate(path)
+            const nextState = SeamlessDiffSwitcher.getDerivedStateFromProps(
+              props,
+              switcher.state
+            )
+            assert.equal(nextState.isLoadingDiff, true)
+            const externalContents = {
+              ...contents,
+              sshScope: undefined,
+              sshGeneration: undefined,
+            }
+            const externalState = SeamlessDiffSwitcher.getDerivedStateFromProps(
+              { ...props, externalFileContents: externalContents },
+              { ...switcher.state, fileContents: externalContents }
+            )
+            assert.equal(
+              externalState.isLoadingDiff,
+              false,
+              'Externally supplied contents do not depend on the SSH cache lifetime'
+            )
+            ready = true
+            break
+          }
+        }
+        await new Promise(resolve => setTimeout(resolve, 10))
+      }
+      assert(ready, 'Preloader did not finish warming the preview')
+      assert(sshCalls > before)
+      assert(
+        workers.every(
+          worker => worker.onmessage === null && worker.onerror === null
+        ),
+        'Idle workers retain no request handlers'
+      )
+    } finally {
+      preloader.dispose()
+      sshPreviewCache.activate(null)
+      globalThis.Worker = previousWorker
+      await writeFile(join(repo, file.path), previous)
     }
   })
 

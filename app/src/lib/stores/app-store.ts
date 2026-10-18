@@ -1,3 +1,4 @@
+import { sshPreviewCache, sshDiffKey } from '../ssh-preview-cache'
 import { parseSSHRepositoryPath, sshRepositoryPath } from '../ssh-path'
 import * as Path from 'path'
 import { writeFile } from 'fs/promises'
@@ -93,6 +94,7 @@ import {
   DiffSelection,
   DiffSelectionType,
   DiffType,
+  IDiff,
   ImageDiffType,
   ITextDiff,
 } from '../../models/diff'
@@ -696,6 +698,7 @@ export class AppStore extends TypedBaseStore<IAppState> {
   private repositories: ReadonlyArray<Repository> = new Array<Repository>()
   private recentRepositories: ReadonlyArray<number> = new Array<number>()
 
+  private sshDiffRequest: AbortController | null = null
   private selectedRepository: Repository | CloningRepository | null = null
 
   /** The background fetcher for the currently selected repository. */
@@ -2764,6 +2767,12 @@ export class AppStore extends TypedBaseStore<IAppState> {
         },
       }))
     }
+    sshPreviewCache.activate(
+      repository instanceof Repository && repository.isSSH
+        ? repository.path
+        : null
+    )
+    this.sshDiffRequest?.abort()
     this.selectedRepository = repository
 
     this.emitUpdate()
@@ -3732,6 +3741,10 @@ export class AppStore extends TypedBaseStore<IAppState> {
       return null
     }
 
+    if (repository.isSSH) {
+      sshPreviewCache.invalidate(repository.path)
+    }
+
     this.repositoryStateCache.updateChangesState(repository, state =>
       updateChangedFiles(state, status, clearPartialState)
     )
@@ -4203,11 +4216,59 @@ export class AppStore extends TypedBaseStore<IAppState> {
       return
     }
 
-    const diff = await getWorkingDirectoryDiff(
-      repository,
-      selectedFileBeforeLoad,
-      this.hideWhitespaceInChangesDiff
-    )
+    if (repository.isSSH && this.selectedRepository?.path !== repository.path) {
+      return
+    }
+    const generation = sshPreviewCache.generation
+    let diff: IDiff
+    const request = repository.isSSH ? new AbortController() : null
+    if (request !== null) {
+      this.sshDiffRequest?.abort()
+      this.sshDiffRequest = request
+    }
+    try {
+      diff = repository.isSSH
+        ? await sshPreviewCache.get(
+            repository.path,
+            sshDiffKey(
+              selectedFileBeforeLoad.id,
+              this.hideWhitespaceInChangesDiff
+            ),
+            signal =>
+              getWorkingDirectoryDiff(
+                repository,
+                selectedFileBeforeLoad,
+                this.hideWhitespaceInChangesDiff,
+                { signal }
+              ),
+            { signal: request!.signal }
+          )
+        : await getWorkingDirectoryDiff(
+            repository,
+            selectedFileBeforeLoad,
+            this.hideWhitespaceInChangesDiff
+          )
+    } catch (error) {
+      if (
+        (error instanceof Error && error.name === 'AbortError') ||
+        request?.signal.aborted ||
+        (repository.isSSH &&
+          !sshPreviewCache.isCurrent(repository.path, generation))
+      ) {
+        return
+      }
+      throw error
+    } finally {
+      if (this.sshDiffRequest === request) {
+        this.sshDiffRequest = null
+      }
+    }
+    if (
+      repository.isSSH &&
+      !sshPreviewCache.isCurrent(repository.path, generation)
+    ) {
+      return
+    }
 
     const stateAfterLoad = this.repositoryStateCache.get(repository)
     const changesState = stateAfterLoad.changesState

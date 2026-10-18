@@ -347,7 +347,8 @@ export async function getCommitRangeChangedFiles(
 export async function getWorkingDirectoryDiff(
   repository: Repository,
   file: WorkingDirectoryFileChange,
-  hideWhitespaceInDiff: boolean = false
+  hideWhitespaceInDiff: boolean = false,
+  previewOptions?: { signal?: AbortSignal; maxBuffer?: number }
 ): Promise<IDiff> {
   // `--no-ext-diff` should be provided wherever we invoke `git diff` so that any
   // diff.external program configured by the user is ignored
@@ -398,8 +399,11 @@ export async function getWorkingDirectoryDiff(
     args,
     repository.path,
     'getWorkingDirectoryDiff',
-    { successExitCodes, encoding: 'buffer' }
+    { successExitCodes, encoding: 'buffer', ...previewOptions }
   )
+  if (previewOptions?.signal?.aborted) {
+    throw new Error('SSH preview superseded')
+  }
   const lineEndingsChange = parseLineEndingsWarning(stderr)
 
   return buildDiff(stdout, repository, file, 'HEAD', 'HEAD', lineEndingsChange)

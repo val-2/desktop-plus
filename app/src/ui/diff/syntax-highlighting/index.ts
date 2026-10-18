@@ -1,3 +1,4 @@
+import { sshPreviewCache, sshContentsKey } from '../../../lib/ssh-preview-cache'
 import { SSHRepositoryReader } from '../../../lib/ssh-repository'
 import { parseSSHRepositoryPath } from '../../../lib/ssh-path'
 import * as Path from 'path'
@@ -40,6 +41,8 @@ export interface IFileContents {
   readonly oldContents: ReadonlyArray<string>
   readonly newContents: ReadonlyArray<string>
   readonly canBeExpanded: boolean
+  readonly sshScope?: string
+  readonly sshGeneration?: number
 }
 
 interface IFileTokens {
@@ -49,7 +52,8 @@ interface IFileTokens {
 
 async function getOldFileContent(
   repository: Repository,
-  file: ChangedFile
+  file: ChangedFile,
+  signal?: AbortSignal
 ): Promise<Buffer | null> {
   if (
     file.status.kind === AppFileStatusKind.New ||
@@ -76,13 +80,15 @@ async function getOldFileContent(
     repository,
     commitish,
     getOldPathOrDefault(file),
-    MaxHighlightContentLength
+    MaxHighlightContentLength,
+    signal
   )
 }
 
 async function getNewFileContent(
   repository: Repository,
-  file: ChangedFile
+  file: ChangedFile,
+  signal?: AbortSignal
 ): Promise<Buffer | null> {
   if (file.status.kind === AppFileStatusKind.Deleted) {
     return null
@@ -93,7 +99,8 @@ async function getNewFileContent(
     if (ssh !== null) {
       return new SSHRepositoryReader(ssh).readWorkingFile(
         file.path,
-        MaxHighlightContentLength - 1
+        MaxHighlightContentLength - 1,
+        signal
       )
     }
     return readPartialFile(
@@ -113,16 +120,53 @@ async function getNewFileContent(
   return assertNever(file, 'Unknown file change type')
 }
 
-export async function getFileContents(
+export function peekFileContents(
   repo: Repository,
   file: ChangedFile
+): IFileContents | undefined {
+  return repo.isSSH && file instanceof WorkingDirectoryFileChange
+    ? sshPreviewCache.peek<IFileContents>(repo.path, sshContentsKey(file.id))
+    : undefined
+}
+
+export function getFileContents(
+  repo: Repository,
+  file: ChangedFile,
+  options: { signal?: AbortSignal; background?: boolean } = {}
+): Promise<IFileContents> {
+  if (!repo.isSSH || !(file instanceof WorkingDirectoryFileChange)) {
+    return loadFileContents(repo, file)
+  }
+  const generation = sshPreviewCache.generation
+  return sshPreviewCache.get(
+    repo.path,
+    sshContentsKey(file.id),
+    async signal => ({
+      ...(await loadFileContents(repo, file, signal)),
+      sshScope: repo.path,
+      sshGeneration: generation,
+    }),
+    options
+  )
+}
+
+async function loadFileContents(
+  repo: Repository,
+  file: ChangedFile,
+  signal?: AbortSignal
 ): Promise<IFileContents> {
   const [oldContents, newContents] = await Promise.all([
-    getOldFileContent(repo, file).catch(e => {
+    getOldFileContent(repo, file, signal).catch(e => {
+      if (signal?.aborted) {
+        throw e
+      }
       log.error('Could not load old contents for syntax highlighting', e)
       return null
     }),
-    getNewFileContent(repo, file).catch(e => {
+    getNewFileContent(repo, file, signal).catch(e => {
+      if (signal?.aborted) {
+        throw e
+      }
       log.error('Could not load new contents for syntax highlighting', e)
       return null
     }),
@@ -188,10 +232,53 @@ export function getLineFilters(hunks: ReadonlyArray<DiffHunk>): ILineFilters {
   return { oldLineFilter, newLineFilter }
 }
 
-export async function highlightContents(
+function tokenCacheKey(
   contents: IFileContents,
   tabSize: number,
   lineFilters: ILineFilters
+) {
+  return JSON.stringify(['tokens', contents.file.id, tabSize, lineFilters])
+}
+
+export function peekHighlightContents(
+  contents: IFileContents,
+  tabSize: number,
+  lineFilters: ILineFilters
+): IFileTokens | undefined {
+  return contents.sshScope !== undefined &&
+    sshPreviewCache.isCurrent(contents.sshScope, contents.sshGeneration)
+    ? sshPreviewCache.peek<IFileTokens>(
+        contents.sshScope,
+        tokenCacheKey(contents, tabSize, lineFilters)
+      )
+    : undefined
+}
+
+export function highlightContents(
+  contents: IFileContents,
+  tabSize: number,
+  lineFilters: ILineFilters,
+  options: { signal?: AbortSignal; background?: boolean } = {}
+): Promise<IFileTokens> {
+  if (
+    contents.sshScope === undefined ||
+    !sshPreviewCache.isCurrent(contents.sshScope, contents.sshGeneration)
+  ) {
+    return loadHighlightContents(contents, tabSize, lineFilters, options.signal)
+  }
+  return sshPreviewCache.get(
+    contents.sshScope,
+    tokenCacheKey(contents, tabSize, lineFilters),
+    signal => loadHighlightContents(contents, tabSize, lineFilters, signal),
+    options
+  )
+}
+
+async function loadHighlightContents(
+  contents: IFileContents,
+  tabSize: number,
+  lineFilters: ILineFilters,
+  signal?: AbortSignal
 ): Promise<IFileTokens> {
   const { file, oldContents, newContents } = contents
 
@@ -205,8 +292,12 @@ export async function highlightContents(
           Path.basename(oldPath),
           Path.extname(oldPath),
           tabSize,
-          lineFilters.oldLineFilter
+          lineFilters.oldLineFilter,
+          signal
         ).catch(e => {
+          if (signal?.aborted) {
+            throw e
+          }
           log.error('Highlighter worked failed for old contents', e)
           return {}
         }),
@@ -217,8 +308,12 @@ export async function highlightContents(
           Path.basename(file.path),
           Path.extname(file.path),
           tabSize,
-          lineFilters.newLineFilter
+          lineFilters.newLineFilter,
+          signal
         ).catch(e => {
+          if (signal?.aborted) {
+            throw e
+          }
           log.error('Highlighter worked failed for new contents', e)
           return {}
         }),
