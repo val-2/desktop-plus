@@ -540,7 +540,13 @@ export class FilterChangesList extends React.Component<
     )
     const nearby =
       selected < 0 ? [] : all.slice(Math.max(0, selected - 1), selected + 5)
-    const unique = new Map([...nearby, ...files].map(f => [f.id, f]))
+    const selectedIsVisible = files.some(f =>
+      this.props.selectedFileIDs.includes(f.id)
+    )
+    const prioritized = selectedIsVisible
+      ? [...nearby, ...files]
+      : [...files, ...nearby]
+    const unique = new Map(prioritized.map(f => [f.id, f]))
     this.sshPreloader.schedule(
       this.props.repository,
       [...unique.values()],

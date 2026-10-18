@@ -44,6 +44,20 @@ describe('bounded SSH preview cache', () => {
     })
   })
 
+  it('retains a bounded preview until its status snapshot is invalidated', async () => {
+    const cache = new SSHPreviewCache()
+    cache.activate('repo')
+    await cache.get('repo', 'file', async () => 'ready')
+    const now = mock.method(Date, 'now', () => Number.MAX_SAFE_INTEGER)
+    try {
+      assert.equal(cache.peek('repo', 'file'), 'ready')
+      cache.invalidate('repo')
+      assert.equal(cache.peek('repo', 'file'), undefined)
+    } finally {
+      now.mock.restore()
+    }
+  })
+
   it('limits active loaders to two and prioritizes user selections over queued speculation', async () => {
     const cache = new SSHPreviewCache()
     cache.activate('repo')

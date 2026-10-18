@@ -31,7 +31,7 @@ export class SSHPreviewCache {
   public constructor(
     private readonly maxBytes = 24 * 1024 * 1024,
     private readonly maxEntries = 48,
-    private readonly ttl = 15000
+    private readonly ttl = Number.POSITIVE_INFINITY
   ) {}
 
   public get generation() {

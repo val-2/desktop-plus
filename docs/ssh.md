@@ -28,7 +28,7 @@ During initial loading, the toolbar and empty changes panel display loading feed
 
 The changes list progressively prepares diffs, source contents, and syntax tokens for up to 12 nearby/visible files. Scrolling and selection reprioritize that window; cold foreground reads have priority over queued speculation. Ready previews initialize the original diff components synchronously, without fetching their contents again.
 
-The display cache is limited to 48 entries and an estimated retained-data budget of 24 MiB (8 MiB per entry), with at most two preview loaders active. This is a cache budget, not a cap on the entire Electron process or exact JavaScript heap size. A content loader may read its two sides in parallel. Completed previews expire after 15 seconds; status refreshes and repository/worktree changes invalidate them, including changes that leave the same Git status code.
+The display cache is limited to 48 entries and an estimated retained-data budget of 24 MiB (8 MiB per entry), with at most two preview loaders active. This is a cache budget, not a cap on the entire Electron process or exact JavaScript heap size. A content loader may read its two sides in parallel. Completed previews remain available for the current status snapshot; status refreshes and repository/worktree changes invalidate them, including changes that leave the same Git status code. Scrolling prioritizes the visible files when the selected file is outside the viewport.
 
 Large speculative diffs are capped at 512 KiB and image decodes are not speculatively warmed. If a user selects a file whose speculative read failed, the normal foreground read is retried with its normal limits. Cold, large, or uncached files can still have SSH latency.
 
@@ -85,7 +85,7 @@ On the tested macOS build this produces `dist/Desktop Plus SSH-darwin-arm64/Desk
 
 ## Verification
 
-153 tests passed across the SSH repository/toolbar tests and the original status, worktree, worktree-include, stash, commit, and apply suites. Tests exercise real Git with only the SSH transport replaced by a local POSIX shell, including partial commits, rejected hooks, merge conflicts, unusual paths, stdin, streamed progress, stash/worktree lifecycle, recoverable discards, symlink protection, repository identity, and loading-state parity.
+154 tests passed across the SSH repository/toolbar tests and the original status, worktree, worktree-include, stash, commit, and apply suites. Tests exercise real Git with only the SSH transport replaced by a local POSIX shell, including partial commits, rejected hooks, merge conflicts, unusual paths, stdin, streamed progress, stash/worktree lifecycle, recoverable discards, symlink protection, repository identity, and loading-state parity.
 
 ```sh
 NODE_OPTIONS=--no-experimental-webstorage node script/test.mjs \
